@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Global background image covering entire screen, behind the game */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Make the canvas transparent so page wallpaper shows through wherever we don't paint */
+canvas {
+  background: transparent !important;
+  display: block;
+}
+
+/* Default body background fallback; will be replaced dynamically when a backdrop is available */
+body {
+  background-color: #000; /* fallback when no wallpaper image is available */
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: cover;
+  background-attachment: fixed;
+  background-image: url("../images/background purple space.png");
+  background-size: cover;        /* stretch to cover entire viewport */
+  background-position: center;   /* keep centered */
+  background-repeat: no-repeat;  /* no tiling */
+  background-attachment: fixed;  /* subtle parallax and fill */
+}
+
+/* Ensure app containers remain transparent so the background shows through */
+#root, .app, .game-container {
+  background: transparent;
+}
