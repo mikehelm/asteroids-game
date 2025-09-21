@@ -1202,29 +1202,6 @@ const Game: React.FC = () => {
     }
   };
 
-  const updateVisualDebris = () => {
-    if (!gameState.visualDebris) return;
-    const arr = gameState.visualDebris;
-    for (let i = arr.length - 1; i >= 0; i--) {
-      const d = arr[i];
-      // Update position
-      d.position.x += d.velocity.x;
-      d.position.y += d.velocity.y;
-      // Reduce drag so debris holds velocity longer
-      d.velocity.x *= 0.995;
-      d.velocity.y *= 0.995;
-      if (typeof d.rotation === 'number' && typeof d.rotationSpeed === 'number') {
-        d.rotation += d.rotationSpeed;
-      }
-      d.life++;
-      // Remove if out of life or well off-screen (no wrap)
-      const off = d.position.x < -60 || d.position.x > CANVAS_WIDTH + 60 || d.position.y < -60 || d.position.y > CANVAS_HEIGHT + 60;
-      if (d.life >= d.maxLife || off) {
-        arr.splice(i, 1);
-      }
-    }
-  };
-
   const drawVisualDebris = (ctx: CanvasRenderingContext2D) => {
     if (!gameState.visualDebris || gameState.visualDebris.length === 0) return;
     for (const d of gameState.visualDebris) {
@@ -5301,8 +5278,6 @@ ctx.strokeStyle = '#ffffff';
         drawAlienBullets(ctx, gameState.playerMissiles);
       }
       drawExplosionsMod(ctx, gameState, env);
-      // Visual-only debris
-      updateVisualDebris();
       drawDebrisMod(ctx, gameState, env);
       // Draw refuel station (and handle docking/refill)
       drawRefuelStation(ctx, gameState);
