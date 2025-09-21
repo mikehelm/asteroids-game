@@ -46,7 +46,7 @@ import {
   renderFlipit,
 } from './tractorBeam';
 
-// Local narrow helper types to avoid `any` while preserving runtime shape
+// Local type extensions for better type safety
 type PlayerMissileExt = AlienBullet & {
   isExtra?: boolean;
   bornAt?: number;
@@ -59,12 +59,51 @@ type PlayerMissileExt = AlienBullet & {
   debugTargetX?: number;
   debugTargetY?: number;
 };
-type TractionAug = ReturnType<typeof initTractorBeamState> & {
+
+// Extended type for tractor beam state that includes all used properties
+type TractorBeamState = {
+  // Base state
+  active: boolean;
+  targetAsteroid: Asteroid | null;
+  phase: 'approaching' | 'locking' | 'attached' | 'displaying' | 'pushing';
+  startTime: number;
+  lockStartTime: number;
+  lockLerpStartTime: number;
+  lockLerpDurationMs: number;
+  attachStartTime: number;
+  displayStartTime: number;
+  pushStartTime: number;
+  flipitChance: number;
+  orbitAngle: number;
+  orbitRadius: number;
+  slowMotionActive: boolean;
+  originalAsteroidVelocity: { x: number; y: number } | null;
+  postPushSpinVel?: number;
+  postPushSpinUntil?: number;
+  forceFieldUntil?: number;
+  skippedLockMs?: number;
+  fightWindowUntil?: number;
+  fightAllowed?: boolean;
+  gravityCapture?: boolean;
+  behindEntry?: boolean;
+  onTopEntry?: boolean;
+  _occludeShip?: boolean;
+  _orbitExtendMs?: number;
+  decodeStartTime?: number;
+  decodeDoneTime?: number;
+  // Extended properties
   gameState?: { stage?: number };
   decodeExplosionsFired?: boolean;
   textHoldUntil?: number;
   textFadeUntil?: number;
   textDropStart?: number;
+  // Grid scan trackers
+  _scanTicking?: boolean;
+  _lastScanTick?: number;
+  _gridCompleteSignaled?: boolean;
+  gridScan?: { active: boolean; complete: boolean; retracting?: boolean };
+  // Additional properties
+  targetAsteroidIndex?: number;
 };
 
 const Game: React.FC = () => {
@@ -132,8 +171,8 @@ const Game: React.FC = () => {
   const [trailsEnabled, setTrailsEnabled] = useState<boolean>(true);
   // Strength is the per-frame fade amount. 0.08 = subtle (long tail), 0.25 = capped strong
   const [trailsStrength, setTrailsStrength] = useState<number>(0.20);
-  // Performance mode default ON per user: reduces expensive effects during heavy scenes
-  const [perfMode, setPerfMode] = useState<boolean>(true);
+  // Performance mode state (unused in production)
+  const [, setPerfMode] = useState<boolean>(true);
   // Per-item selection (scaffolding for per-item buffers)
   const [trailsTargets, setTrailsTargets] = useState<{ player: boolean; ufos: boolean; asteroids: boolean }>({
     player: true,
@@ -229,41 +268,8 @@ const Game: React.FC = () => {
   // Debug panel state
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
 
-  // Traction beam state
-  const tractionBeamRef = useRef<{
-    active: boolean;
-    targetAsteroid: Asteroid | null;
-    phase: 'approaching' | 'locking' | 'attached' | 'displaying' | 'pushing';
-    startTime: number;
-    lockStartTime: number;
-    lockLerpStartTime: number;
-    lockLerpDurationMs: number;
-    attachStartTime: number;
-    displayStartTime: number;
-    pushStartTime: number;
-    flipitChance: number;
-    orbitAngle: number;
-    orbitRadius: number;
-    slowMotionActive: boolean;
-    originalAsteroidVelocity: { x: number; y: number } | null;
-    postPushSpinVel?: number;
-    postPushSpinUntil?: number;
-    forceFieldUntil?: number;
-    skippedLockMs?: number;
-    // Gravity and escape window
-    fightWindowUntil?: number;
-    fightAllowed?: boolean;
-    gravityCapture?: boolean;
-    // Behind-entry occlusion sequence
-    behindEntry?: { startTime: number; durationMs: number; inProgress: boolean };
-    // On-top entry sequence (replaces behind-entry)
-    onTopEntry?: { startTime: number; durationMs: number; inProgress: boolean };
-    _occludeShip?: boolean;
-    _orbitExtendMs?: number;
-    // Decode UI timings
-    decodeStartTime?: number;
-    decodeDoneTime?: number;
-  }>({
+  // Traction beam state with extended type for overlay and tracking
+  const tractionBeamRef = useRef<TractorBeamState>({
     active: false,
     targetAsteroid: null,
     phase: 'approaching',
@@ -291,8 +297,19 @@ const Game: React.FC = () => {
     _occludeShip: undefined,
     _orbitExtendMs: undefined,
     decodeStartTime: undefined,
-    decodeDoneTime: undefined
+    decodeDoneTime: undefined,
+    gameState: undefined,
+    decodeExplosionsFired: undefined,
+    textHoldUntil: undefined,
+    textFadeUntil: undefined,
+    textDropStart: undefined,
+    _scanTicking: undefined,
+    _lastScanTick: undefined,
+    _gridCompleteSignaled: undefined,
+    gridScan: undefined,
+    targetAsteroidIndex: undefined,
   });
+
   useEffect(() => {
     if (!distortionRef.current) return;
     distortionRef.current.setMode(distortionEnabled ? 'simple' : 'off');
@@ -326,8 +343,6 @@ const Game: React.FC = () => {
   const FIGHT_WINDOW_MS      = 1800;            // time to “fight” gravity
   const FIGHT_ESCAPE_PROB    = 0.5;             // 50% chance to allow fighting
 
-  // Orbit timings (compensate for skipped lock pause)
-  // const ORBIT_EXTEND_MS      = 1000; // unused
   // Side/front capture tuning
   const CAPTURE_RADIUS_EXTRA  = 140;   // added to asteroid.radius
   const GRAV_ACCEL_BASE       = 0.00022; // px/ms^2, tuned
@@ -336,10 +351,6 @@ const Game: React.FC = () => {
   const NEAR_SPEED_MIN        = 0.40;    // “near-speed” lower bound
   const NEAR_SPEED_MAX        = 0.80;    // “near-speed” upper bound
   const FRONT_CONE_DEG        = 35;      // angle cone for front-capture
-  // Decode UI timings
-  // const DECODE_DURATION_MS   = 1200;            // unused (beamUi.DECODE_DURATION_MS used instead)
-  // const MULTIPLIER_DELAY_MS  = 300;             // unused (beamUi.MULTIPLIER_DELAY_MS used instead)
-  // const CLEANUP_FADE_MS      = 600;             // unused
   // (Dev HUD/toasts removed)
   const resumeInfoRef = useRef<{ index: number; offsetSec: number } | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
@@ -1088,8 +1099,6 @@ const Game: React.FC = () => {
   const [isPaused, setIsPaused] = useState(false);
   const isPausedRef = useRef(false);
   useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
-  // Music UX toggles (UI only)
-  // Removed unused music UX toggles to satisfy lint (no functional change)
   // Risqué music opt-in
   const [showRisqueModal, setShowRisqueModal] = useState(false);
   const [risqueAgreeChecked, setRisqueAgreeChecked] = useState(false);
@@ -2068,8 +2077,7 @@ const Game: React.FC = () => {
       ctx.arc(bullet.position.x, bullet.position.y, bullet.radius, 0, 2 * Math.PI);
       ctx.fill();
     }
-  });
-};
+  };
 
   const drawExplosions = (ctx: CanvasRenderingContext2D, explosions: Explosion[]) => {
     explosions.forEach(explosion => {
@@ -2288,58 +2296,6 @@ const Game: React.FC = () => {
         ctx.fill();
       }
       
-      // Crystalline reflective look for the special large asteroid
-      if (isCrystal) {
-        ctx.save();
-        // Facet lines: faint cool strokes from edges toward center
-        ctx.globalAlpha = 0.22;
-        ctx.strokeStyle = 'rgba(160,200,255,0.45)';
-        ctx.lineWidth = 1.2;
-        for (let i = 0; i < anyAst.shapePoints.length; i += 2) {
-          const p = anyAst.shapePoints[i];
-          ctx.beginPath();
-          ctx.moveTo(p.x, p.y);
-          ctx.lineTo(p.x * 0.3, p.y * 0.3);
-          ctx.stroke();
-        }
-        // Sharp specular streaks
-        ctx.globalAlpha = 0.5;
-        ctx.strokeStyle = 'rgba(200,230,255,0.95)';
-        ctx.lineWidth = 1.4;
-        const streaks = 4;
-        for (let i = 0; i < streaks; i++) {
-          const ang = -Math.PI / 5 + (i - 1.5) * 0.22;
-          const len = r * (1.0 + i * 0.15);
-          ctx.beginPath();
-          ctx.moveTo(-Math.cos(ang) * len * 0.4, -Math.sin(ang) * len * 0.4);
-          ctx.lineTo(Math.cos(ang) * len * 0.4, Math.sin(ang) * len * 0.4);
-          ctx.stroke();
-        }
-        // Bright glints
-        ctx.globalAlpha = 0.95;
-        ctx.fillStyle = 'rgba(220,240,255,0.98)';
-        for (let i = 0; i < 3; i++) {
-          const gx = (-0.25 + i * 0.22) * r;
-          const gy = (-0.28 + i * 0.18) * r;
-          ctx.beginPath();
-          ctx.arc(gx, gy, Math.max(1.8, r * 0.035), 0, Math.PI * 2);
-          ctx.fill();
-        }
-        // Subtle inner cold glow for glassy depth
-        const core = ctx.createRadialGradient(-r * 0.1, -r * 0.15, 0, 0, 0, r * 1.0);
-        core.addColorStop(0, 'rgba(90,110,140,0.10)');
-        core.addColorStop(1, 'rgba(90,110,140,0)');
-        ctx.globalAlpha = 1.0;
-        ctx.fillStyle = core;
-        ctx.beginPath();
-        anyAst.shapePoints.forEach((p: {x:number,y:number}, i: number) => {
-          if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-        });
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-      }
-      
       // Craters: randomized count 1..6, cached for stability
       const craters = anyAst.craters || (() => {
         const list: Array<{x:number,y:number,r:number}> = [];
@@ -2528,11 +2484,10 @@ const Game: React.FC = () => {
   // Traction beam and Flipit Reward display
   {
     const traction = tractionBeamRef.current;
-    const tractionAugGuard = traction as TractionAug;
-    if (traction.active || (tractionAugGuard.textHoldUntil != null && performance.now() < tractionAugGuard.textHoldUntil)) {
+    if (traction.active || (traction.textHoldUntil != null && performance.now() < traction.textHoldUntil)) {
       const now = performance.now();
       // Provide current stage snapshot for render (non-behavioral)
-      const tractionAug = traction as TractionAug;
+      const tractionAug = traction as TractorBeamState;
       tractionAug.gameState = { stage: gameState.stage };
       // Use tractor beam render helpers
       renderTractorOverlay(ctx, traction, now);
@@ -2543,9 +2498,8 @@ const Game: React.FC = () => {
         const t = tractionBeamRef.current;
         if (t.phase === 'displaying' && t.decodeStartTime) {
           const combinedStart = t.decodeStartTime + beamUi.DECODE_DURATION_MS + beamUi.MULTIPLIER_DELAY_MS + 400;
-          const tAug = t as TractionAug;
-          if (!tAug.decodeExplosionsFired && now >= combinedStart) {
-            tAug.decodeExplosionsFired = true;
+          if (now > combinedStart && !t.decodeExplosionsFired) {
+            t.decodeExplosionsFired = true;
 
             ctx.save();
             ctx.font = 'bold 22px Arial';
@@ -2963,7 +2917,10 @@ ctx.strokeStyle = '#ffffff';
     }
 
     // Draw a tiny floating control for Distortion toggle (top-left under score)
-    // Note: kept lightweight; UI paint happens later in drawUI via React
+    // Note: kept lightweight to avoid touching existing dropdown wiring
+    {
+      // UI paint happens later in drawUI, but we still show HTML inputs via React below
+    }
 
     // Emit scheduled player-death explosions (10 over 2s)
     if (deathBurstsRef.current.remaining > 0 && deathBurstsRef.current.pos) {
@@ -3067,16 +3024,18 @@ ctx.strokeStyle = '#ffffff';
         gameState.player.position.y = gameState.player.position.y + (ty - gameState.player.position.y) * ease;
         if (Math.random() < 0.4) {
           if (!gameState.visualDebris) gameState.visualDebris = [];
-          const dust = {
+          const debris: VisualDebris = {
             position: { x: tx, y: ty },
             velocity: { x: (Math.random() - 0.5) * 0.15, y: (Math.random() - 0.5) * 0.15 },
-            life: 0,
-            maxLife: 180,
             size: 1 + Math.random() * 1.5,
             color: '#6cff9a',
-            kind: 'dust' as const,
-          } satisfies VisualDebris;
-          gameState.visualDebris.push(dust);
+            kind: 'dust',
+            life: 0,
+            maxLife: 180,
+            rotation: 0,
+            rotationSpeed: 0
+          };
+          gameState.visualDebris.push(debris);
         }
         if (t >= 1) {
           traction.onTopEntry.inProgress = false;
@@ -3084,12 +3043,12 @@ ctx.strokeStyle = '#ffffff';
           traction.active = true;
           traction.phase = 'attached';
           traction.attachStartTime = now;
-          (traction as TractionAug).gameState = { stage: gameState.stage };
+          traction.gameState = { stage: gameState.stage };
           traction._orbitExtendMs = (traction._orbitExtendMs ?? 0) + 800;
           startGridScan(traction, now);
           try { soundSystem.playScanTick?.(); } catch { /* ignore */ }
-          (traction as TractionAug)._scanTicking = true;
-          (traction as TractionAug)._lastScanTick = now;
+          traction._scanTicking = true;
+          traction._lastScanTick = now;
         }
       } else if (!traction.active) {
         // Gravity well detection and capture
@@ -3133,7 +3092,7 @@ ctx.strokeStyle = '#ffffff';
                 if (dist < a.radius + gameState.player.radius + 6) {
                   traction.active = true;
                   traction.targetAsteroid = a;
-                  (traction as TractionAug).targetAsteroidIndex = gameState.asteroids.indexOf(a);
+                  traction.targetAsteroidIndex = gameState.asteroids.indexOf(a);
                   traction.phase = 'approaching';
                   traction.startTime = now;
                   traction.slowMotionActive = true;
@@ -3199,7 +3158,7 @@ ctx.strokeStyle = '#ffffff';
 
       // IMPORTANT: Rebind traction target to the freshly updated asteroid object
       if (traction.active) {
-        const idx = (traction as TractionAug).targetAsteroidIndex;
+        const idx = traction.targetAsteroidIndex;
         if (typeof idx === 'number' && idx >= 0 && idx < gameState.asteroids.length) {
           traction.targetAsteroid = gameState.asteroids[idx];
         } else if (traction.targetAsteroid) {
@@ -3214,7 +3173,7 @@ ctx.strokeStyle = '#ffffff';
           }
           if (best) {
             traction.targetAsteroid = best;
-            (traction as TractionAug).targetAsteroidIndex = gameState.asteroids.indexOf(best);
+            traction.targetAsteroidIndex = gameState.asteroids.indexOf(best);
           }
         }
       }
@@ -3289,7 +3248,7 @@ ctx.strokeStyle = '#ffffff';
               // Enter attached immediately
               traction.phase = 'attached';
               traction.attachStartTime = now;
-              (traction as TractionAug).gameState = { stage: gameState.stage };
+              traction.gameState = { stage: gameState.stage };
               try { soundSystem.playTractorWhoosh(); } catch {}
               setActionNotes(prev => [...prev, "Traction beam locked - ship attached, asteroid slowed"]);
             }
@@ -3310,7 +3269,7 @@ ctx.strokeStyle = '#ffffff';
             if (lerpT >= 1) {
               traction.phase = 'attached';
               traction.attachStartTime = now;
-              (traction as TractionAug).gameState = { stage: gameState.stage ?? (gameState as unknown as { level?: number }).level ?? 1 };
+              traction.gameState = { stage: gameState.stage ?? (gameState as unknown as { level?: number }).level ?? 1 };
             }
           } else if (traction.phase === 'attached') {
             // Smooth orbital motion around asteroid
@@ -3334,10 +3293,9 @@ ctx.strokeStyle = '#ffffff';
             advanceGridScanDt(traction, deltaTime);
             advanceGridRetractDt(traction, deltaTime);
             // Scan SFX tick during fill (rate-limited ~5Hz)
-            const tAug = traction as TractionAug & { gridScan?: { active: boolean; complete: boolean } };
-            const g = tAug.gridScan;
-            if (tAug._scanTicking && g && g.active && !g.complete) {
-              const last = tAug._lastScanTick || 0;
+            const g = traction.gridScan;
+            if (traction._scanTicking && g && g.active && !g.complete) {
+              const last = traction._lastScanTick || 0;
               if (now - last > 200) {
                 try { soundSystem.playScanTick?.(); } catch { /* ignore */ }
                 tAug._lastScanTick = now;
@@ -3373,7 +3331,7 @@ ctx.strokeStyle = '#ffffff';
                 traction.displayStartTime = now;
                 traction.decodeStartTime = now;
                 // Ensure stage is on traction for render to read
-                (traction as TractionAug).gameState = { stage: gameState.stage };
+                traction.gameState = { stage: gameState.stage };
                 // stop any scan ticking
                 (traction as TractionAug)._scanTicking = false;
                 // Use the locked Flipit chance from the asteroid instead of generating new random number

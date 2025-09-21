@@ -3,25 +3,25 @@ import { Vector2, GameObject } from './types';
 export let CANVAS_WIDTH = 960; // 20% larger from 800
 export let CANVAS_HEIGHT = 720; // 20% larger from 600
 
-export function setCanvasSize(width: number, height: number) {
+export function setCanvasSize(width: number, height: number): void {
   CANVAS_WIDTH = Math.max(320, Math.floor(width));
   CANVAS_HEIGHT = Math.max(240, Math.floor(height));
 }
 
-export function wrapPosition(position: Vector2): Vector2 {
+export function wrapPosition(position: Readonly<Vector2>): Vector2 {
   return {
     x: ((position.x % CANVAS_WIDTH) + CANVAS_WIDTH) % CANVAS_WIDTH,
     y: ((position.y % CANVAS_HEIGHT) + CANVAS_HEIGHT) % CANVAS_HEIGHT,
   };
 }
 
-export function distance(a: Vector2, b: Vector2): number {
+export function distance(a: Readonly<Vector2>, b: Readonly<Vector2>): number {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-export function checkCollision(a: GameObject, b: GameObject): boolean {
+export function checkCollision(a: Readonly<GameObject>, b: Readonly<GameObject>): boolean {
   return distance(a.position, b.position) < (a.radius + b.radius);
 }
 
@@ -36,36 +36,36 @@ export function vectorFromAngle(angle: number, magnitude: number = 1): Vector2 {
   };
 }
 
-export function addVectors(a: Vector2, b: Vector2): Vector2 {
+export function addVectors(a: Readonly<Vector2>, b: Readonly<Vector2>): Vector2 {
   return {
     x: a.x + b.x,
     y: a.y + b.y,
   };
 }
 
-export function multiplyVector(vector: Vector2, scalar: number): Vector2 {
+export function multiplyVector(vector: Readonly<Vector2>, scalar: number): Vector2 {
   return {
     x: vector.x * scalar,
     y: vector.y * scalar,
   };
 }
 
-export function subtractVectors(a: Vector2, b: Vector2): Vector2 {
+export function subtractVectors(a: Readonly<Vector2>, b: Readonly<Vector2>): Vector2 {
   return {
     x: a.x - b.x,
     y: a.y - b.y,
   };
 }
 
-export function dotProduct(a: Vector2, b: Vector2): number {
+export function dotProduct(a: Readonly<Vector2>, b: Readonly<Vector2>): number {
   return a.x * b.x + a.y * b.y;
 }
 
-export function vectorMagnitude(vector: Vector2): number {
+export function vectorMagnitude(vector: Readonly<Vector2>): number {
   return Math.sqrt(vector.x * vector.x + vector.y * vector.y);
 }
 
-export function normalizeVector(vector: Vector2): Vector2 {
+export function normalizeVector(vector: Readonly<Vector2>): Vector2 {
   const magnitude = vectorMagnitude(vector);
   if (magnitude === 0) return { x: 0, y: 0 };
   return {
@@ -74,7 +74,11 @@ export function normalizeVector(vector: Vector2): Vector2 {
   };
 }
 
-export function calculateGravitationalForce(obj1: GameObject & { mass: number }, obj2: GameObject & { mass: number }, gravitationalConstant: number = 0.1): Vector2 {
+export function calculateGravitationalForce(
+  obj1: Readonly<GameObject> & { mass: number },
+  obj2: Readonly<GameObject> & { mass: number },
+  gravitationalConstant: number = 0.1
+): Vector2 {
   const distanceVector = subtractVectors(obj2.position, obj1.position);
   const distance = vectorMagnitude(distanceVector);
   

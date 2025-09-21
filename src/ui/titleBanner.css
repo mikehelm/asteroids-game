@@ -1,0 +1,29 @@
+/* gradient drift title */
+.tb-title-gradient {
+  background: linear-gradient(90deg, #76e0a9, #7aa7ff, #ff87c2, #76e0a9);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: tb-gradient-drift 12s linear infinite;
+}
+
+@keyframes tb-gradient-drift {
+  0% { background-position: 0% 0%; filter: hue-rotate(0deg) }
+  50% { background-position: 100% 0%; filter: hue-rotate(30deg) }
+  100% { background-position: 0% 0%; filter: hue-rotate(0deg) }
+}
+
+/* reactive shake effect */
+.tb-shake {
+  animation: tb-shake-kf 0.4s ease both;
+}
+
+@keyframes tb-shake-kf {
+  0% { transform: translateX(0) }
+  20% { transform: translateX(-2px) rotate(-0.3deg) }
+  40% { transform: translateX(2px) rotate(0.3deg) }
+  60% { transform: translateX(-1px) rotate(-0.2deg) }
+  80% { transform: translateX(1px) rotate(0.2deg) }
+  100% { transform: translateX(0) }
+}

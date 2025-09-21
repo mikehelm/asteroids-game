@@ -146,6 +146,11 @@ export function createAsteroid(size: 'large' | 'medium' | 'small', position?: Ve
     health,
     maxHealth: health,
     rotationSpeed,
+    // Ensure optional special-asteroid fields are present (explicitly undefined by default)
+    special: undefined,
+    specialSpawn: undefined,
+    glowColor: undefined,
+    flipitChance: undefined,
   };
 }
 
@@ -305,7 +310,7 @@ export function createAlienShip(
   const baseSpeed = 1.5;
   const baseFireRate = 90; // frames between shots (lower = faster)
   
-  const alienShip = {
+  const alienShip: AlienShip & { approachSide: 'top' | 'right' | 'bottom' | 'left' } = {
     position,
     velocity: { x: 0, y: 0 },
     rotation: 0,
@@ -318,10 +323,8 @@ export function createAlienShip(
     targetAngle: 0,
     difficulty,
     shotCount: 0,
-  } as AlienShip & { approachSide: 'top' | 'right' | 'bottom' | 'left' };
-
-  // Add approach side info for stereo music
-  (alienShip as AlienShip & { approachSide: 'top' | 'right' | 'bottom' | 'left' }).approachSide = approachSide;
+    approachSide,
+  };
 
   return alienShip;
 }

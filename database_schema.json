@@ -1,0 +1,304 @@
+{
+  "entities": {
+    "Vector2": {
+      "description": "2D vector used for positions and velocities",
+      "fields": {
+        "x": "number",
+        "y": "number"
+      }
+    },
+    "Player": {
+      "description": "The player-controlled ship",
+      "fields": {
+        "position": "Vector2",
+        "velocity": "Vector2",
+        "rotation": "number",
+        "radius": "number",
+        "thrust": "number",
+        "maxSpeed": "number",
+        "health": "number",
+        "maxHealth": "number",
+        "invulnerable": "number",
+        "mass": "number",
+        "shieldTime": "number",
+        "doubleShooter": "number",
+        "doubleShooterStacks": "number | undefined",
+        "missiles": "number | undefined",
+        "fuel": "number | undefined",
+        "maxFuel": "number | undefined",
+        "fuelLowThreshold": "number | undefined",
+        "fuelCriticalThreshold": "number | undefined"
+      }
+    },
+    "Asteroid": {
+      "description": "Asteroid entity that can split when destroyed",
+      "fields": {
+        "id": "string",
+        "size": "\"large\" | \"medium\" | \"small\"",
+        "radius": "number",
+        "position": "Vector2",
+        "velocity": "Vector2",
+        "rotation": "number",
+        "rotationSpeed": "number",
+        "health": "number",
+        "maxHealth": "number",
+        "special": "boolean | undefined",
+        "glowColor": "\"green\" | \"red\" | undefined",
+        "specialSpawn": "\"bonus\" | \"alien\" | undefined",
+        "flipitChance": "number | undefined"
+      }
+    },
+    "AlienShip": {
+      "description": "Hostile alien ship",
+      "fields": {
+        "id": "string",
+        "position": "Vector2",
+        "velocity": "Vector2",
+        "rotation": "number",
+        "health": "number",
+        "maxHealth": "number",
+        "isMissileType": "boolean | undefined"
+      }
+    },
+    "Bullet": {
+      "description": "Projectile fired by player or aliens",
+      "fields": {
+        "id": "string",
+        "position": "Vector2",
+        "velocity": "Vector2",
+        "radius": "number",
+        "ttl": "number",
+        "owner": "\"player\" | \"alien\""
+      }
+    },
+    "Bonus": {
+      "description": "Pickups with temporary or instant effects",
+      "fields": {
+        "id": "string",
+        "type": "\"shield\" | \"heal\" | \"doubleShooter\" | \"missile\"",
+        "position": "Vector2",
+        "velocity": "Vector2",
+        "radius": "number",
+        "life": "number",
+        "maxLife": "number",
+        "healAmount": "number | undefined"
+      }
+    },
+    "Explosion": {
+      "description": "Visual explosion effect",
+      "fields": {
+        "id": "string",
+        "position": "Vector2",
+        "radius": "number",
+        "life": "number",
+        "maxLife": "number"
+      }
+    },
+    "VisualDebris": {
+      "description": "Small debris particles from impacts",
+      "fields": {
+        "position": "Vector2",
+        "velocity": "Vector2",
+        "size": "number",
+        "color": "string",
+        "kind": "\"dust\" | \"chunk\"",
+        "life": "number",
+        "maxLife": "number",
+        "rotation": "number | undefined",
+        "rotationSpeed": "number | undefined"
+      }
+    },
+    "RewardShip": {
+      "description": "Friendly reward ship used for docking sequences",
+      "fields": {
+        "position": "Vector2",
+        "tileX": "number",
+        "tileY": "number",
+        "escortTimer": "number | undefined",
+        "departTimer": "number | undefined"
+      }
+    },
+    "RefuelStation": {
+      "description": "Station used to refuel the player",
+      "fields": {
+        "position": "Vector2",
+        "tileX": "number",
+        "tileY": "number"
+      }
+    },
+    "TractorBeamState": {
+      "description": "Transient state for the tractor beam Flipit sequence",
+      "fields": {
+        "active": "boolean",
+        "phase": "\"approaching\" | \"locking\" | \"attached\" | \"displaying\" | \"pushing\" | \"idle\"",
+        "targetAsteroid": "Asteroid | null",
+        "startTime": "number | undefined",
+        "attachStartTime": "number | undefined",
+        "displayStartTime": "number | undefined",
+        "pushStartTime": "number | undefined",
+        "orbitAngle": "number",
+        "orbitRadius": "number",
+        "flipitChance": "number | undefined",
+        "textAnchorX": "number | undefined",
+        "textAnchorY": "number | undefined",
+        "textVelX": "number | undefined",
+        "textVelY": "number | undefined",
+        "textHoldUntil": "number | undefined",
+        "textFadeUntil": "number | undefined"
+      }
+    },
+    "GameState": {
+      "description": "Top-level game state container",
+      "fields": {
+        "player": "Player",
+        "bullets": "Bullet[]",
+        "alienBullets": "Bullet[]",
+        "playerMissiles": "Bullet[] | undefined",
+        "asteroids": "Asteroid[]",
+        "alienShips": "AlienShip[]",
+        "bonuses": "Bonus[]",
+        "explosions": "Explosion[]",
+        "visualDebris": "VisualDebris[]",
+        "rewardShip": "RewardShip | null",
+        "refuelStation": "RefuelStation | null",
+        "score": "number",
+        "stage": "number",
+        "gameRunning": "boolean",
+        "gameStarted": "boolean",
+        "keys": "Record<string, boolean>",
+        "stageStartTime": "number",
+        "stageWaitTime": "number",
+        "alienSpawnCount": "number",
+        "levelComplete": "boolean",
+        "warpEffect": "number",
+        "alienApproachMusicPlayed": "boolean",
+        "asteroidsSpawned": "boolean",
+        "lastBonusSpawn": "number",
+        "healEffect": "number",
+        "introPhase": "\"none\" | \"ship-entrance\" | \"health-fill\" | \"complete\"",
+        "introTimer": "number",
+        "shipScale": "number",
+        "shipIntroPosition": "Vector2",
+        "lives": "number",
+        "respawning": "boolean",
+        "respawnCountdown": "number",
+        "worldTileX": "number | undefined",
+        "worldTileY": "number | undefined"
+      }
+    }
+  },
+  "relationships": [
+    {
+      "from": "GameState",
+      "to": "Player",
+      "type": "hasOne",
+      "notes": "GameState holds a single player instance"
+    },
+    {
+      "from": "GameState",
+      "to": "Asteroid",
+      "type": "hasMany",
+      "notes": "Active asteroids in the playfield"
+    },
+    {
+      "from": "GameState",
+      "to": "AlienShip",
+      "type": "hasMany",
+      "notes": "Active hostile ships"
+    },
+    {
+      "from": "GameState",
+      "to": "Bullet",
+      "type": "hasMany",
+      "notes": "Projectiles in flight owned by player or aliens"
+    },
+    {
+      "from": "GameState",
+      "to": "Bonus",
+      "type": "hasMany",
+      "notes": "Pickups available on the field"
+    },
+    {
+      "from": "GameState",
+      "to": "Explosion",
+      "type": "hasMany",
+      "notes": "Active explosion visuals"
+    },
+    {
+      "from": "GameState",
+      "to": "VisualDebris",
+      "type": "hasMany",
+      "notes": "Small particles and debris"
+    },
+    {
+      "from": "TractorBeamState",
+      "to": "Asteroid",
+      "type": "references",
+      "notes": "`targetAsteroid` points to the current special asteroid"
+    },
+    {
+      "from": "Asteroid",
+      "to": "Asteroid",
+      "type": "spawns",
+      "notes": "Large/medium asteroids can split into smaller asteroids when destroyed"
+    }
+  ],
+  "examples": {
+    "player": {
+      "position": { "x": 400, "y": 300 },
+      "velocity": { "x": 0.2, "y": -0.1 },
+      "rotation": 1.57,
+      "radius": 14,
+      "health": 100,
+      "maxHealth": 100,
+      "fuel": 75,
+      "maxFuel": 100,
+      "missiles": 10
+    },
+    "specialAsteroid": {
+      "id": "ast-001",
+      "size": "large",
+      "radius": 48,
+      "position": { "x": 600, "y": 220 },
+      "velocity": { "x": -0.4, "y": 0.2 },
+      "rotation": 0.0,
+      "rotationSpeed": 0.02,
+      "health": 9,
+      "maxHealth": 9,
+      "special": true,
+      "glowColor": "green",
+      "specialSpawn": "bonus",
+      "flipitChance": 0.075
+    },
+    "tractorBeam": {
+      "active": true,
+      "phase": "displaying",
+      "targetAsteroid": "ref:ast-001",
+      "displayStartTime": 123456.78,
+      "orbitAngle": 0.3,
+      "orbitRadius": 42,
+      "flipitChance": 0.075,
+      "textAnchorX": 410,
+      "textAnchorY": 270,
+      "textVelX": 0.05,
+      "textVelY": 0.02,
+      "textHoldUntil": 126000.00,
+      "textFadeUntil": 127000.00
+    },
+    "gameState": {
+      "player": "ref:player",
+      "asteroids": ["ref:ast-001"],
+      "alienShips": [],
+      "bullets": [],
+      "bonuses": [],
+      "explosions": [],
+      "visualDebris": [],
+      "rewardShip": null,
+      "refuelStation": null,
+      "stage": 1,
+      "score": 0,
+      "worldTileX": 0,
+      "worldTileY": 0
+    }
+  }
+}

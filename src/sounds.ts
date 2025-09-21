@@ -1,5 +1,10 @@
 // Sound effect system using Web Audio API
-class SoundSystem {
+import type { TrackInfo } from './types';
+
+// Internal and public audio types
+interface TrackMeta { key: string; url: string; name: string; ext: string }
+export interface MusicState { isPlaying: boolean; index: number; offset: number; trackCount: number }
+class SoundSystemImpl {
   private audioContext: AudioContext | null = null;
   private masterVolume = 0.3; // legacy for SFX; will map to sfxVolume
   private bufferCache: Map<string, AudioBuffer> = new Map();
@@ -43,6 +48,56 @@ class SoundSystem {
   constructor() {
     // Initialize audio context on first user interaction
     this.initAudioContext();
+  }
+
+  // Player missile acceleration cue (transition into homing)
+  playMissileStage2(): void {
+    if (!this.isAudioAllowed()) return;
+    if (!this.audioContext) return;
+    this.loadBuffer('missile_stage2.wav').then(buf => {
+      if (!buf) return;
+      // Slightly punchy but under the explosion volume
+      this.playBuffer(buf, { volume: 0.75 });
+    });
+  }
+
+  // --- Scan grid cues (optional) ---
+  // Quiet tick used during scan fill; very short blip to avoid annoyance
+  playScanTick?(): void {
+    if (!this.isAudioAllowed() || !this.audioContext) return;
+    const ac = this.audioContext;
+    const osc = this.createOscillator(1400, 'square');
+    const gain = this.createGainNode(0.0001);
+    if (!osc || !gain) return;
+    osc.connect(gain);
+    gain.connect(this.sfxGain ?? ac.destination);
+    const t0 = ac.currentTime;
+    // Subtle 30ms blip
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.02 * this.masterVolume, t0 + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.03);
+    osc.start();
+    osc.stop(t0 + 0.035);
+  }
+
+  // Short soft 'complete' whoomp when scan completes and retract starts
+  playScanComplete?(): void {
+    if (!this.isAudioAllowed() || !this.audioContext) return;
+    const ac = this.audioContext;
+    // Low sine drop + quick noise burst layered very quietly
+    const tone = this.createOscillator(220, 'sine');
+    const tgain = this.createGainNode(0.0001);
+    if (!tone || !tgain) return;
+    tone.connect(tgain);
+    tgain.connect(this.sfxGain ?? ac.destination);
+    const t0 = ac.currentTime;
+    tgain.gain.setValueAtTime(0.0001, t0);
+    tgain.gain.exponentialRampToValueAtTime(0.06 * this.masterVolume, t0 + 0.04);
+    tgain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.24);
+    tone.frequency.setValueAtTime(280, t0);
+    tone.frequency.exponentialRampToValueAtTime(140, t0 + 0.22);
+    tone.start();
+    tone.stop(t0 + 0.26);
   }
 
   // --- Generic helper for panned one-shots by asset name ---
@@ -268,28 +323,74 @@ class SoundSystem {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     const ac = this.audioContext;
-    this.loadBuffer('whoosh.wav').then(buf => {
-      if (buf) {
-        this.playBuffer(buf, { volume: 0.35 });
-      } else {
-        // Fallback synthesized short whoosh
-        const noise = ac.createBufferSource();
-        const buffer = ac.createBuffer(1, ac.sampleRate * 0.18, ac.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < data.length; i++) {
-          const t = i / data.length;
-          data[i] = (Math.random() * 2 - 1) * Math.exp(-t * 10);
+    const file = this.assetExists('whoosh.wav') ? 'whoosh.wav' : (this.assetExists('woosh.wav') ? 'woosh.wav' : null);
+    if (file) {
+      this.loadBuffer(file).then(buf => {
+        if (buf) {
+          // Louder whoosh for tractor-beam scene
+          this.playBuffer(buf, { volume: 0.6 });
+        } else {
+          // Fallback synthesized short whoosh
+          const noise = ac.createBufferSource();
+          const buffer = ac.createBuffer(1, ac.sampleRate * 0.18, ac.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < data.length; i++) {
+            const t = i / data.length;
+            data[i] = (Math.random() * 2 - 1) * Math.exp(-t * 10);
+          }
+          noise.buffer = buffer;
+          const hp = ac.createBiquadFilter();
+          hp.type = 'highpass';
+          hp.frequency.value = 700;
+          const gain = ac.createGain();
+          // Louder fallback gain
+          gain.gain.value = 0.3 * this.masterVolume;
+          noise.connect(hp); hp.connect(gain); gain.connect(this.sfxGain ?? ac.destination);
+          noise.start();
         }
-        noise.buffer = buffer;
-        const hp = ac.createBiquadFilter();
-        hp.type = 'highpass';
-        hp.frequency.value = 700;
-        const gain = ac.createGain();
-        gain.gain.value = 0.18 * this.masterVolume;
-        noise.connect(hp); hp.connect(gain); gain.connect(this.sfxGain ?? ac.destination);
-        noise.start();
+      });
+    } else {
+      // Synth fallback without touching asset loader
+      const noise = ac.createBufferSource();
+      const buffer = ac.createBuffer(1, ac.sampleRate * 0.18, ac.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) {
+        const t = i / data.length;
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-t * 10);
       }
-    });
+      noise.buffer = buffer;
+      const hp = ac.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 700;
+      const gain = ac.createGain();
+      gain.gain.value = 0.3 * this.masterVolume;
+      noise.connect(hp); hp.connect(gain); gain.connect(this.sfxGain ?? ac.destination);
+      noise.start();
+    }
+  }
+
+  // Bounce/thump used when tractor-beam ejects the player away
+  playBounce() {
+    if (!this.isAudioAllowed()) return;
+    if (!this.audioContext) return;
+    const ac = this.audioContext;
+    const file = this.assetExists('bounce.wav') ? 'bounce.wav' : (this.assetExists('asteroid bump.wav') ? 'asteroid bump.wav' : null);
+    if (file) {
+      this.loadBuffer(file).then(buf => { if (buf) this.playBuffer(buf, { volume: file === 'bounce.wav' ? 0.8 : 0.7 }); });
+    } else {
+      // Synthesized low thump
+      const osc = this.createOscillator(90, 'sine');
+      const gain = this.createGainNode(0.0001);
+      if (!osc || !gain) return;
+      osc.connect(gain);
+      gain.connect(this.sfxGain ?? ac.destination);
+      const t0 = ac.currentTime;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.12 * this.masterVolume, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
+      osc.start();
+      osc.stop(t0 + 0.24);
+    }
   }
 
   // Start a looping bed for the bad UFO until stopped
@@ -465,34 +566,45 @@ class SoundSystem {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     const ac = this.audioContext;
-    // Prefer 'woosh.wav' (lowercase) but fall back to 'whoosh.wav' if present
-    const noiseBufPromise = (async () => {
-      const buf1 = await this.loadBuffer('woosh.wav');
-      if (buf1) return buf1;
-      return this.loadBuffer('whoosh.wav');
-    })();
-    noiseBufPromise.then(buf => {
-      if (buf) {
-        // Use whoosh asset if available
-        this.playBuffer(buf, { volume: 0.8 });
-      } else {
-        // Fallback synthesized whoosh using filtered noise
-        const noise = ac.createBufferSource();
-        const buffer = ac.createBuffer(1, ac.sampleRate * 0.3, ac.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.8));
-        noise.buffer = buffer;
-        const filter = ac.createBiquadFilter();
-        filter.type = 'highpass';
-        filter.frequency.value = 800;
-        const gain = ac.createGain();
-        gain.gain.value = 0.25 * this.masterVolume;
-        noise.connect(filter);
-        filter.connect(gain);
-        gain.connect(this.sfxGain ?? ac.destination);
-        noise.start();
-      }
-    });
+    const file = this.assetExists('woosh.wav') ? 'woosh.wav' : (this.assetExists('whoosh.wav') ? 'whoosh.wav' : null);
+    if (file) {
+      this.loadBuffer(file).then(buf => {
+        if (buf) {
+          this.playBuffer(buf, { volume: 0.8 });
+        } else {
+          const noise = ac.createBufferSource();
+          const buffer = ac.createBuffer(1, ac.sampleRate * 0.3, ac.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.8));
+          noise.buffer = buffer;
+          const filter = ac.createBiquadFilter();
+          filter.type = 'highpass';
+          filter.frequency.value = 800;
+          const gain = ac.createGain();
+          gain.gain.value = 0.25 * this.masterVolume;
+          noise.connect(filter);
+          filter.connect(gain);
+          gain.connect(this.sfxGain ?? ac.destination);
+          noise.start();
+        }
+      });
+    } else {
+      // Fallback synthesized whoosh using filtered noise
+      const noise = ac.createBufferSource();
+      const buffer = ac.createBuffer(1, ac.sampleRate * 0.3, ac.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (data.length * 0.8));
+      noise.buffer = buffer;
+      const filter = ac.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.value = 800;
+      const gain = ac.createGain();
+      gain.gain.value = 0.25 * this.masterVolume;
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.sfxGain ?? ac.destination);
+      noise.start();
+    }
   }
 
   setOnMusicTrackChange(listener: ((index: number) => void) | null) {
@@ -610,6 +722,21 @@ class SoundSystem {
     }
     console.warn(`Sound asset not found: ${fileName}`);
     return null;
+  }
+
+  // Silent variant for optional assets (no console warning)
+  private resolveAssetUrlSilent(fileName: string): string | null {
+    for (const key of Object.keys(this.assetUrls)) {
+      if (key.endsWith(`/sounds/${fileName}`)) {
+        return this.assetUrls[key] as string;
+      }
+    }
+    return null;
+  }
+
+  // Quick existence check for optional assets
+  private assetExists(fileName: string): boolean {
+    return !!this.resolveAssetUrlSilent(fileName);
   }
 
   private async loadBuffer(fileName: string): Promise<AudioBuffer | null> {
@@ -758,28 +885,32 @@ class SoundSystem {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     // Map to: ourshots.wav
-    this.loadBuffer('ourshots.wav').then(buf => {
-      if (!buf) return;
-      // Slight randomization
-      const rate = 0.95 + Math.random() * 0.1;
-      this.playBuffer(buf, { volume: 0.5, playbackRate: rate });
-    });
+    if (this.assetExists('ourshots.wav')) {
+      this.loadBuffer('ourshots.wav').then(buf => {
+        if (!buf) return;
+        // Slight randomization
+        const rate = 0.95 + Math.random() * 0.1;
+        this.playBuffer(buf, { volume: 0.5, playbackRate: rate });
+      });
+    }
   }
 
   // Alien ship shoot sound
-  playAlienShoot() {
+  playAlienShoot(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     // Map to: enemy lazer.wav
-    this.loadBuffer('enemy lazer.wav').then(buf => {
-      if (!buf) return;
-      const rate = 0.95 + Math.random() * 0.1;
-      this.playBuffer(buf, { volume: 0.6, playbackRate: rate });
-    });
+    if (this.assetExists('enemy lazer.wav')) {
+      this.loadBuffer('enemy lazer.wav').then(buf => {
+        if (!buf) return;
+        const rate = 0.95 + Math.random() * 0.1;
+        this.playBuffer(buf, { volume: 0.6, playbackRate: rate });
+      });
+    }
   }
 
   // Alien laser sound (every 5th shot)
-  playAlienLaser() {
+  playAlienLaser(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
 
@@ -800,38 +931,44 @@ class SoundSystem {
   }
 
   // Large asteroid destruction
-  playLargeAsteroidDestroy() {
+  playLargeAsteroidDestroy(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     // Map to: asteroid_explosion-3.wav or Massive_asteroid_4.wav as accent (pick 3)
-    this.loadBuffer('asteroid_explosion-3.wav').then(buf => {
-      if (!buf) return;
-      this.playBuffer(buf, { volume: 0.8 });
-    });
+    if (this.assetExists('asteroid_explosion-3.wav')) {
+      this.loadBuffer('asteroid_explosion-3.wav').then(buf => {
+        if (!buf) return;
+        this.playBuffer(buf, { volume: 0.8 });
+      });
+    }
   }
 
   // Medium asteroid destruction
-  playMediumAsteroidDestroy() {
+  playMediumAsteroidDestroy(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
-    this.loadBuffer('asteroid_explosion-2.wav').then(buf => {
-      if (!buf) return;
-      this.playBuffer(buf, { volume: 0.7 });
-    });
+    if (this.assetExists('asteroid_explosion-2.wav')) {
+      this.loadBuffer('asteroid_explosion-2.wav').then(buf => {
+        if (!buf) return;
+        this.playBuffer(buf, { volume: 0.7 });
+      });
+    }
   }
 
   // Small asteroid destruction
-  playSmallAsteroidDestroy() {
+  playSmallAsteroidDestroy(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
-    this.loadBuffer('asteroid_explosion-1.wav').then(buf => {
-      if (!buf) return;
-      this.playBuffer(buf, { volume: 0.6 });
-    });
+    if (this.assetExists('asteroid_explosion-1.wav')) {
+      this.loadBuffer('asteroid_explosion-1.wav').then(buf => {
+        if (!buf) return;
+        this.playBuffer(buf, { volume: 0.6 });
+      });
+    }
   }
 
   // Player hit by asteroid (different sounds based on asteroid size)
-  playPlayerHitByLargeAsteroid() {
+  playPlayerHitByLargeAsteroid(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
 
@@ -851,7 +988,7 @@ class SoundSystem {
     oscillator.stop(this.audioContext.currentTime + 0.3);
   }
 
-  playPlayerHitByMediumAsteroid() {
+  playPlayerHitByMediumAsteroid(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
 
@@ -871,7 +1008,7 @@ class SoundSystem {
     oscillator.stop(this.audioContext.currentTime + 0.2);
   }
 
-  playPlayerHitBySmallAsteroid() {
+  playPlayerHitBySmallAsteroid(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
 
@@ -892,7 +1029,7 @@ class SoundSystem {
   }
 
   // Player hit by alien bullet
-  playPlayerHitByAlien() {
+  playPlayerHitByAlien(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
 
@@ -913,30 +1050,34 @@ class SoundSystem {
   }
 
   // Alien ship destruction
-  playAlienDestroy() {
+  playAlienDestroy(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     // Map to: killedalien.mp3
-    this.loadBuffer('killedalien.mp3').then(buf => {
-      if (!buf) return;
-      // +30% volume boost
-      this.playBuffer(buf, { volume: 0.91 });
-    });
+    if (this.assetExists('killedalien.mp3')) {
+      this.loadBuffer('killedalien.mp3').then(buf => {
+        if (!buf) return;
+        // +30% volume boost
+        this.playBuffer(buf, { volume: 0.91 });
+      });
+    }
   }
 
   // Bonus collected sound
-  playBonusCollected() {
+  playBonusCollected(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     // Map to: pickedupaward.mp3
-    this.loadBuffer('pickedupaward.mp3').then(buf => {
-      if (!buf) return;
-      this.playBuffer(buf, { volume: 0.6 });
-    });
+    if (this.assetExists('pickedupaward.mp3')) {
+      this.loadBuffer('pickedupaward.mp3').then(buf => {
+        if (!buf) return;
+        this.playBuffer(buf, { volume: 0.6 });
+      });
+    }
   }
 
   // Bonus missed sound (disappointed "Aww")
-  playBonusMissed() {
+  playBonusMissed(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
 
@@ -967,50 +1108,58 @@ class SoundSystem {
   }
 
   // Asteroid collision sounds (asteroid hitting asteroid)
-  playLargeAsteroidCollision() {
+  playLargeAsteroidCollision(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     // Map to: asteroid bump.wav
-    this.loadBuffer('asteroid bump.wav').then(buf => {
-      if (!buf) return;
-      const rate = 0.95 + Math.random() * 0.1;
-      this.playBuffer(buf, { volume: 0.5, playbackRate: rate });
-    });
+    if (this.assetExists('asteroid bump.wav')) {
+      this.loadBuffer('asteroid bump.wav').then(buf => {
+        if (!buf) return;
+        const rate = 0.95 + Math.random() * 0.1;
+        this.playBuffer(buf, { volume: 0.5, playbackRate: rate });
+      });
+    }
   }
 
-  playMediumAsteroidCollision() {
+  playMediumAsteroidCollision(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
-    this.loadBuffer('asteroid bump.wav').then(buf => {
-      if (!buf) return;
-      const rate = 1.0 + Math.random() * 0.1;
-      this.playBuffer(buf, { volume: 0.45, playbackRate: rate });
-    });
+    if (this.assetExists('asteroid bump.wav')) {
+      this.loadBuffer('asteroid bump.wav').then(buf => {
+        if (!buf) return;
+        const rate = 1.0 + Math.random() * 0.1;
+        this.playBuffer(buf, { volume: 0.45, playbackRate: rate });
+      });
+    }
   }
 
-  playSmallAsteroidCollision() {
+  playSmallAsteroidCollision(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
-    this.loadBuffer('asteroid bump.wav').then(buf => {
-      if (!buf) return;
-      const rate = 1.1 + Math.random() * 0.1;
-      this.playBuffer(buf, { volume: 0.4, playbackRate: rate });
-    });
+    if (this.assetExists('asteroid bump.wav')) {
+      this.loadBuffer('asteroid bump.wav').then(buf => {
+        if (!buf) return;
+        const rate = 1.1 + Math.random() * 0.1;
+        this.playBuffer(buf, { volume: 0.4, playbackRate: rate });
+      });
+    }
   }
 
   // Stage completion warp sound
-  playWarpSound() {
+  playWarpSound(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     // Map to: boom.wav (short one-shot)
-    this.loadBuffer('boom.wav').then(buf => {
-      if (!buf) return;
-      this.playBuffer(buf, { volume: 0.7 });
-    });
+    if (this.assetExists('boom.wav')) {
+      this.loadBuffer('boom.wav').then(buf => {
+        if (!buf) return;
+        this.playBuffer(buf, { volume: 0.7 });
+      });
+    }
   }
 
   // Alien ship engine sound (distance-based volume)
-  playAlienEngine(distance: number, maxDistance: number = 400) {
+  playAlienEngine(distance: number, maxDistance: number = 400): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
 
@@ -1042,24 +1191,26 @@ class SoundSystem {
   }
 
   // Game over sound
-  playGameOver() {
+  playGameOver(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     // Map to: gameovertingle.mp3
-    this.loadBuffer('gameovertingle.mp3').then(buf => {
-      if (!buf) return;
-      this.playBuffer(buf, { volume: 0.7 });
-    });
+    if (this.assetExists('gameovertingle.mp3')) {
+      this.loadBuffer('gameovertingle.mp3').then(buf => {
+        if (!buf) return;
+        this.playBuffer(buf, { volume: 0.7 });
+      });
+    }
   }
 
   // Set master volume (0.0 to 1.0)
-  setVolume(volume: number) {
+  setVolume(volume: number): void {
     // Back-compat: map to SFX volume
     this.setSfxVolume(volume);
   }
 
   // Mute/unmute all sounds
-  setMuted(muted: boolean) {
+  setMuted(muted: boolean): void {
     this.ensureAudioContext();
     if (!this.audioContext) return;
     this.muted = muted;
@@ -1082,7 +1233,7 @@ class SoundSystem {
   }
 
   // Stop all currently playing sounds
-  stopAllSounds() {
+  stopAllSounds(): void {
     if (!this.audioContext) return;
     
     // Close and recreate the audio context to stop all sounds
@@ -1091,7 +1242,7 @@ class SoundSystem {
   }
 
   // --- Music System ---
-  private ensureMusicTracks() {
+  private ensureMusicTracks(): void {
     if (this.musicTracks) return;
     const items: Array<{ key: string; url: string; name: string; ext: string }> = [];
     for (const key of Object.keys(this.musicAssetUrls)) {
@@ -1126,8 +1277,11 @@ class SoundSystem {
     if (this.risqueEnabled) {
       return list.map((_, i) => i);
     }
-    const re = /^[0-9]/;
-    return list.map((t, i) => (re.test(t.name) ? i : -1)).filter(i => i >= 0);
+    // Default view: only numbered, non-risqué tracks (names starting with a digit)
+    return list
+      .map((t, i) => ({ t, i }))
+      .filter(({ t }) => /^\d/.test(t.name))
+      .map(({ i }) => i);
   }
 
   private resolveRealIndex(viewIndex: number): number {
@@ -1137,7 +1291,7 @@ class SoundSystem {
     return v[i];
   }
 
-  setRisqueEnabled(enabled: boolean) {
+  setRisqueEnabled(enabled: boolean): void {
     this.risqueEnabled = !!enabled;
     // Clamp current view index into new view range
     const v = this.getCurrentViewIndices();
@@ -1151,11 +1305,63 @@ class SoundSystem {
     if (this.musicTrackChangeListener) this.musicTrackChangeListener(this.musicCurrentViewIndex);
   }
 
-  getMusicTracks(): Array<{ name: string; url: string }> {
+  getMusicTracks(): TrackInfo[] {
     this.ensureMusicTracks();
     const v = this.getCurrentViewIndices();
     const list = this.musicTracks ?? [];
     return v.map(i => ({ name: list[i].name, url: list[i].url }));
+  }
+
+  // Dev-only: seed track names/order from CSV content
+  // CSV columns expected: track_id,name,url,risque,default_volume,duration_sec
+  // We match rows to discovered assets by URL filename (case-insensitive)
+  seedTracksFromCsv(csvText: string): void {
+    if (!import.meta.env?.DEV) return; // no-op in prod builds
+    this.ensureMusicTracks();
+    if (!this.musicTracks || this.musicTracks.length === 0) return;
+
+    // Parse simple CSV (no external deps). Assumes no embedded commas.
+    const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length <= 1) return;
+    const header = lines[0].split(',').map(s => s.trim());
+    const idxName = header.findIndex(h => /^(name)$/i.test(h));
+    const idxUrl = header.findIndex(h => /^(url)$/i.test(h));
+    if (idxName < 0 || idxUrl < 0) return;
+    const rows: Array<{ name: string; file: string }> = [];
+    for (let i = 1; i < lines.length; i++) {
+      const raw = lines[i];
+      // naive split without embedded comma support
+      const cols = raw.split(',');
+      if (cols.length <= Math.max(idxName, idxUrl)) continue;
+      const strip = (s: string) => s.replace(/^"|"$/g, '');
+      const name = strip(cols[idxName]);
+      const url = strip(cols[idxUrl]);
+      const parts = url.split('/');
+      const file = (parts[parts.length - 1] || url).toLowerCase();
+      rows.push({ name, file: file.toLowerCase() });
+    }
+
+    // Build map from filename -> desired name and target order
+    const byFile = new Map<string, { name: string; order: number }>();
+    rows.forEach((r, i) => byFile.set(r.file, { name: r.name, order: i }));
+
+    // Apply rename and compute ordering weight for each discovered track
+    const withWeights: Array<TrackMeta & { __order: number }> = (this.musicTracks ?? []).map((t) => {
+      const file = (t.name && t.name.toLowerCase().endsWith('.mp3')) ? t.name.toLowerCase() : (t.url.split('/').pop() || '').toLowerCase();
+      const meta = byFile.get(file);
+      return {
+        ...t,
+        name: meta?.name ?? t.name,
+        __order: (typeof meta?.order === 'number') ? meta!.order : Number.MAX_SAFE_INTEGER
+      };
+    });
+
+    // Stable sort by CSV order, leaving unmatched at the end in existing relative order
+    withWeights.sort((a, b) => a.__order - b.__order);
+    // Rebuild list without temp field to avoid delete & any casts
+    this.musicTracks = withWeights.map(w => ({ key: w.key, url: w.url, name: w.name, ext: w.ext }));
+    // Notify listeners so UI can refresh the displayed list/current name
+    if (this.musicTrackChangeListener) this.musicTrackChangeListener(this.musicCurrentViewIndex);
   }
 
   private async loadMusicBuffer(viewIndex: number): Promise<AudioBuffer | null> {
@@ -1188,7 +1394,7 @@ class SoundSystem {
     this.musicStopping = false;
   }
 
-  async playMusic(index?: number) {
+  async playMusic(index?: number): Promise<void> {
     this.ensureAudioContext();
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
@@ -1297,7 +1503,7 @@ class SoundSystem {
     }
   }
 
-  pauseMusic() {
+  pauseMusic(): void {
     if (!this.audioContext) return;
     if (!this.musicSource) return;
     const elapsed = this.audioContext.currentTime - this.musicStartCtxTime;
@@ -1310,13 +1516,13 @@ class SoundSystem {
     this.musicSessionId++;
   }
 
-  resumeMusic() {
+  resumeMusic(): void {
     if (!this.audioContext) return;
     this.musicPaused = false;
     this.playMusic().catch(() => {});
   }
 
-  stopMusic() {
+  stopMusic(): void {
     this.musicOffsetSec = 0;
     this.musicPaused = false;
     this.musicStopping = true;
@@ -1324,7 +1530,7 @@ class SoundSystem {
   }
 
   // Select track without starting playback (resets resume offset)
-  selectMusicTrack(index: number) {
+  selectMusicTrack(index: number): void {
     this.ensureAudioContext();
     this.ensureMusicTracks();
     const view = this.getCurrentViewIndices();
@@ -1336,7 +1542,7 @@ class SoundSystem {
   }
 
   // Expose current music state for UI logic
-  getMusicState(): { isPlaying: boolean; index: number; offset: number; trackCount: number } {
+  getMusicState(): MusicState {
     // offset reports the resume offset captured at last pause/stop (legacy)
     return {
       isPlaying: !!this.musicSource,
@@ -1364,27 +1570,27 @@ class SoundSystem {
   }
 
   // Set resume point without starting playback; clamps offset to track duration when known later
-  setResumePoint(index: number, offsetSec: number) {
+  setResumePoint(index: number, offsetSec: number): void {
     this.musicCurrentViewIndex = index;
     this.musicOffsetSec = Math.max(0, offsetSec || 0);
     // Do not notify track change listener here to avoid UI flashes; selection APIs will do that
   }
 
   // Resume immediately from a given index+offset
-  resumeFrom(index: number, offsetSec: number) {
+  resumeFrom(index: number, offsetSec: number): void {
     this.musicCurrentViewIndex = index;
     this.musicOffsetSec = Math.max(0, offsetSec || 0);
     this.playMusic().catch(() => {});
   }
 
-  setMusicVolume(v: number) {
+  setMusicVolume(v: number): void {
     this.musicVolume = Math.max(0, Math.min(1, v));
     if (this.musicGain && !this.muted) {
       this.musicGain.gain.setValueAtTime(this.musicVolume, this.audioContext!.currentTime);
     }
   }
 
-  setSfxVolume(v: number) {
+  setSfxVolume(v: number): void {
     this.sfxVolume = Math.max(0, Math.min(1, v));
     if (this.sfxGain && !this.muted) {
       this.sfxGain.gain.setValueAtTime(this.sfxVolume, this.audioContext!.currentTime);
@@ -1392,7 +1598,7 @@ class SoundSystem {
   }
 
   // Called by UI when user explicitly changes SFX volume; marks as user-controlled
-  setSfxVolumeFromUser(v: number) {
+  setSfxVolumeFromUser(v: number): void {
     this.sfxUserSet = true;
     this.setSfxVolume(v);
   }
@@ -1409,11 +1615,12 @@ class SoundSystem {
       const ms = this.getMusicState();
       if (ms.isPlaying) return null;
     } catch { /* no-op */ }
-    this.loadBuffer('space.wav').then(buf => {
-      if (!buf) return;
-      // Louder ambient
-      handle = this.playBuffer(buf, { volume: 0.15, loop: true });
-    });
+    if (this.assetExists('space.wav')) {
+      this.loadBuffer('space.wav').then(buf => {
+        if (!buf) return;
+        handle = this.playBuffer(buf, { volume: 0.15, loop: true });
+      });
+    }
     return {
       stop: () => {
         try { handle?.stop(); } catch { /* no-op */ }
@@ -1429,7 +1636,7 @@ class SoundSystem {
   }
 
   // Louder, obvious tier-change cue (short descending chirp)
-  playTierChangeCue() {
+  playTierChangeCue(): void {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     const osc = this.createOscillator(1200, 'sawtooth');
@@ -1449,5 +1656,12 @@ class SoundSystem {
   }
 }
 
-// Export singleton instance
-export const soundSystem = new SoundSystem();
+// Type: instance of SoundSystemImpl augmented with optional scan hooks
+export type SoundSystem = InstanceType<typeof SoundSystemImpl> & {
+  playScanTick?(): void;
+  stopScanTick?(): void;
+  playScanComplete?(): void;
+};
+
+// Export singleton instance with widened type (optional methods supported by class)
+export const soundSystem: SoundSystem = new SoundSystemImpl();

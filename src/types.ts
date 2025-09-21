@@ -50,6 +50,8 @@ export interface Asteroid extends GameObject {
   special?: boolean;
   specialSpawn?: 'bonus' | 'alien';
   glowColor?: 'red' | 'green';
+  // Optional reward/flip chance associated with special asteroid
+  flipitChance?: number;
 }
 
 export interface AlienShip extends GameObject {
@@ -180,4 +182,34 @@ export interface GameState {
   // Off-screen special vehicles bound to specific world tiles
   refuelStation?: { tileX: number; tileY: number; position: Vector2 } | null;
   rewardShip?: { tileX: number; tileY: number; position: Vector2; velocity?: Vector2; escortTimer?: number; departTimer?: number } | null;
+}
+
+// Tractor beam phases for discriminated union state
+export type TractorBeamPhase = 'approaching' | 'locking' | 'attached' | 'displaying' | 'pushing' | 'idle';
+
+// Transient tractor beam state used during Flipit sequences
+export interface TractorBeamState {
+  active: boolean;
+  phase: TractorBeamPhase;
+  targetAsteroid: Asteroid | null;
+  startTime?: number;
+  attachStartTime?: number;
+  displayStartTime?: number;
+  pushStartTime?: number;
+  orbitAngle: number;
+  orbitRadius: number;
+  flipitChance?: number;
+  // Floating text anchor/velocity and timing for hold/fade
+  textAnchorX?: number;
+  textAnchorY?: number;
+  textVelX?: number;
+  textVelY?: number;
+  textHoldUntil?: number;
+  textFadeUntil?: number;
+}
+
+// Minimal track info shape used by UI and sounds API
+export interface TrackInfo {
+  name: string;
+  url: string;
 }

@@ -1,0 +1,6 @@
+track_id,name,url,risque,default_volume,duration_sec
+T000,"0 The Truth Spotlight","sounds/music/0 The Truth Spotlight.mp3",false,0.6,192
+T001,"1 Welcome to Space 1","sounds/music/1 Welcome to Space 1.mp3",false,0.6,210
+T010,"10. Lets go for a walk","sounds/music/10. Lets go for a walk.mp3",false,0.6,186
+S001,"S1 Velvet Night","sounds/music/S1 Velvet Night.mp3",true,0.55,204
+S002,"S2 Neon Mirage","sounds/music/S2 Neon Mirage.mp3",true,0.55,198
