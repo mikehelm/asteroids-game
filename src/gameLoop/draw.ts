@@ -403,11 +403,80 @@ export function drawAsteroids(
 export function drawAliens(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
-  env: EnvLike
+  _env: EnvLike
 ): void {
-  const r = env.refs as any;
-  const fn = r.drawAlienShipsLocal as (ctx: CanvasRenderingContext2D, ships: any) => void;
-  if (typeof fn === 'function') fn(ctx, gameState.alienShips);
+  gameState.alienShips.forEach(ship => {
+    ctx.save();
+    // Doom sequence visuals for missile-type
+    const missileType = !!ship.isMissileType;
+    const doomStage = (ship as any).doomStage || 0;
+    const doomTimer = (ship as any).doomTimer || 0;
+    // Vibrate jitter during stage 2
+    let jitterX = 0, jitterY = 0;
+    if (missileType && doomStage === 2) {
+      jitterX = (Math.random() - 0.5) * 6;
+      jitterY = (Math.random() - 0.5) * 6;
+    }
+    ctx.translate(ship.position.x + jitterX, ship.position.y + jitterY);
+    // Shrink during stage 3
+    let baseScale = missileType ? 2.0 : 1.0;
+    if (missileType && doomStage === 3) {
+      const t = Math.max(0.05, (doomTimer || 1) / 60);
+      baseScale *= t;
+    }
+    const scale = baseScale;
+    ctx.scale(scale, scale);
+
+    // Saucer body
+    // Disable heavy shadow glows to avoid large-area wash; shading remains via fills/strokes
+    if (missileType && doomStage === 2) {
+      ctx.shadowColor = '#ff6b3a';
+      ctx.shadowBlur = 0;
+    } else if (missileType && doomStage === 3) {
+      ctx.shadowColor = '#ffd8b0';
+      ctx.shadowBlur = 0;
+    } else {
+      ctx.shadowBlur = 0;
+    }
+    ctx.fillStyle = missileType ? '#222326' : '#444444';
+    ctx.strokeStyle = missileType ? '#ff6b3a' : '#666666';
+    ctx.lineWidth = missileType ? 2.5 : 2;
+    ctx.beginPath();
+    ctx.ellipse(0, 2, 20, 8, 0, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.stroke();
+
+    // Top dome (pulse for missile type)
+    const pulse = missileType ? (0.85 + 0.15 * Math.sin(Date.now() * 0.006)) : 1;
+    ctx.fillStyle = missileType ? `rgba(255,120,60,${0.5 * pulse})` : '#555555';
+    ctx.strokeStyle = missileType ? '#ffb46b' : '#777777';
+    ctx.lineWidth = missileType ? 1.8 : 1.5;
+    ctx.beginPath();
+    ctx.ellipse(0, -6, 10, 6, 0, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.stroke();
+
+    // Lower orb/glow
+    ctx.fillStyle = missileType ? (doomStage >= 2 ? 'rgba(255, 68, 68, 0.7)' : 'rgba(255, 68, 68, 0.4)') : 'rgba(255,255,255,0.15)';
+    ctx.beginPath();
+    ctx.arc(0, 8, 6, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.restore();
+
+    // Health bar above ship (scale width by scale)
+    const healthPercentage = ship.health / ship.maxHealth;
+    const barWidth = 20 * scale;
+    const barHeight = 3;
+    ctx.fillStyle = '#333333';
+    ctx.fillRect(ship.position.x - barWidth / 2, ship.position.y - ship.radius - 10, barWidth, barHeight);
+    ctx.fillStyle = healthPercentage > 0.5 ? '#00ff00' : '#ff0000';
+    ctx.fillRect(
+      ship.position.x - barWidth / 2,
+      ship.position.y - ship.radius - 10,
+      barWidth * healthPercentage,
+      barHeight
+    );
+  });
 }
 
 export function drawBullets(
