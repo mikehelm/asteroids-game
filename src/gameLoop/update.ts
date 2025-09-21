@@ -1,6 +1,6 @@
 import type { GameState, Explosion } from '../types';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../utils';
-import { updateExplosion, updatePlayer, updateAlienBullet, updateAlienShip, updateBonus } from '../gameObjects';
+import { updateExplosion, updatePlayer, updateAlienBullet, updateAlienShip, updateBonus, updateBullet } from '../gameObjects';
 
 // Keep the surface minimal for Pass A to avoid cycles. Expand in Pass B as needed.
 export type EnvLike = Record<string, unknown>;
@@ -79,6 +79,10 @@ export function update(
       gameState.player = updatePlayer(gameState.player, (gameState as any).keys, dt);
     }
   } catch { /* no-op */ }
+
+  // Player bullets: per-frame kinematics
+  if (!Array.isArray(gameState.bullets)) gameState.bullets = [];
+  gameState.bullets = gameState.bullets.map(updateBullet);
 
   // Alien bullets (includes enemy shots and non-homing projectiles): per-frame kinematics
   if (!Array.isArray(gameState.alienBullets)) gameState.alienBullets = [];

@@ -59,6 +59,8 @@ import {
   drawAliens as drawAliensMod,
   drawBullets as drawBulletsMod,
   drawBonuses as drawBonusesMod,
+  drawAlienBullets as drawAlienBulletsMod,
+  drawPlayerMissiles as drawPlayerMissilesMod,
   drawTractorOverlay,
   drawHUD,
 } from './gameLoop/draw';
@@ -2005,94 +2007,7 @@ const Game: React.FC = () => {
       );
     });
   };
-  const drawAlienBullets = (ctx: CanvasRenderingContext2D, bullets: AlienBullet[]) => {
-  bullets.forEach(bullet => {
-    const isMissile = !!bullet.homing;
-    const ang = Math.atan2(bullet.velocity.y, bullet.velocity.x);
-    if (isMissile) {
-      const isPlayer = bullet.owner === 'player';
-      ctx.save();
-      if (isPlayer) {
-        // White missile head without costly glow
-        ctx.shadowColor = '#000000';
-        ctx.beginPath();
-        ctx.arc(bullet.position.x, bullet.position.y, Math.max(3, bullet.radius + 1), 0, 2 * Math.PI);
-        ctx.fill();
-        const isExtra = !!(bullet as any).isExtra;
-        if (isExtra) {
-          // Simple minimal tail for extras: short faint line, no flame/smoke
-          const len = 14;
-          const tailX = bullet.position.x - Math.cos(ang) * len;
-          const tailY = bullet.position.y - Math.sin(ang) * len;
-          ctx.strokeStyle = 'rgba(255,255,255,0.35)';
-          ctx.lineWidth = 2.0;
-          ctx.beginPath();
-          ctx.moveTo(bullet.position.x, bullet.position.y);
-          ctx.lineTo(tailX, tailY);
-          ctx.stroke();
-        } else {
-          // Primary: flame + spotty smoke along the historical path
-          {
-            ctx.save();
-            ctx.translate(bullet.position.x, bullet.position.y);
-            ctx.rotate(ang);
-            const flameLen = 14 + Math.sin(performance.now() * 0.02) * 2;
-            const flameWidth = 6;
-            // Outer red
-            let grad = ctx.createLinearGradient(0, 0, -flameLen, 0);
-            grad.addColorStop(0, 'rgba(255, 180, 0, 0.95)');
-            grad.addColorStop(0.6, 'rgba(255, 90, 0, 0.55)');
-            grad.addColorStop(1, 'rgba(255, 0, 0, 0.0)');
-            ctx.fillStyle = grad;
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(-flameLen, flameWidth * 0.5);
-            ctx.lineTo(-flameLen, -flameWidth * 0.5);
-            ctx.closePath();
-            ctx.fill();
-            // Inner bright yellow core
-            const coreLen = flameLen * 0.7;
-            const coreW = flameWidth * 0.35;
-            grad = ctx.createLinearGradient(0, 0, -coreLen, 0);
-            grad.addColorStop(0, 'rgba(255, 255, 160, 0.95)');
-            grad.addColorStop(1, 'rgba(255, 200, 0, 0.0)');
-            ctx.fillStyle = grad;
-            ctx.beginPath();
-            ctx.moveTo(0, 0);
-            ctx.lineTo(-coreLen, coreW * 0.5);
-            ctx.lineTo(-coreLen, -coreW * 0.5);
-            ctx.closePath();
-            ctx.fill();
-            ctx.restore();
-          }
-          const hist = (bullet as any).history as Array<{x:number,y:number}> || [];
-          if (hist.length >= 2) {
-            const gap = 3;
-            const end = Math.max(1, hist.length - gap);
-            for (let i = 0; i < end; i += 2) {
-              const t = i / end;
-              const size = 3.2 * (1 - t) + Math.random() * 0.8;
-              const alpha = Math.max(0, 0.22 * (1 - t) + (Math.random() - 0.5) * 0.04);
-              ctx.fillStyle = `rgba(235,240,255,${alpha})`;
-              const jitterX = (Math.random() - 0.5) * 0.9;
-              const jitterY = (Math.random() - 0.5) * 0.9;
-              ctx.beginPath();
-              ctx.arc(hist[i].x + jitterX, hist[i].y + jitterY, size * 0.6, 0, Math.PI * 2);
-              ctx.fill();
-            }
-          }
-        }
-      }
-      // no special restore here (this block was unrelated to warp trails)
-    } else {
-      // Non-missile bullet visual
-      ctx.fillStyle = '#ff0066';
-      ctx.beginPath();
-      ctx.arc(bullet.position.x, bullet.position.y, bullet.radius, 0, 2 * Math.PI);
-      ctx.fill();
-    }
-  });
-};
+  
 
   const drawExplosions = (ctx: CanvasRenderingContext2D, explosions: Explosion[]) => {
     explosions.forEach(explosion => {
@@ -5270,9 +5185,9 @@ ctx.strokeStyle = '#ffffff';
         drawAliensMod(ctx, gameState, env);
         drawBonusesMod(ctx, gameState, env);
       }
-      drawAlienBullets(ctx, gameState.alienBullets);
+      drawAlienBulletsMod(ctx, gameState, env);
       if (gameState.playerMissiles && gameState.playerMissiles.length > 0) {
-        drawAlienBullets(ctx, gameState.playerMissiles);
+        drawPlayerMissilesMod(ctx, gameState, env);
       }
       drawExplosionsMod(ctx, gameState, env);
       drawDebrisMod(ctx, gameState, env);
