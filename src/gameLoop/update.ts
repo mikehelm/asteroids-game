@@ -1,6 +1,6 @@
 import type { GameState, Explosion } from '../types';
 import { CANVAS_WIDTH, CANVAS_HEIGHT } from '../utils';
-import { updateExplosion } from '../gameObjects';
+import { updateExplosion, updatePlayer, updateAlienBullet, updateAlienShip, updateBonus } from '../gameObjects';
 
 // Keep the surface minimal for Pass A to avoid cycles. Expand in Pass B as needed.
 export type EnvLike = Record<string, unknown>;
@@ -64,4 +64,40 @@ export function update(
       .map(updateExplosion)
       .filter((explosion): explosion is Explosion => explosion.particles.length > 0);
   }
+
+  // =======================
+  // PHYSICS START (Pass B)
+  // =======================
+  // Player: respect tractor-beam attach guard from Game.tsx
+  try {
+    const r = (_env as any)?.refs as any;
+    const t = r?.tractionBeamRef?.current;
+    const isAttachedToAsteroid = !!(t && t.active && (t.phase === 'locking' || t.phase === 'attached'));
+    if (!isAttachedToAsteroid) {
+      // Use dt as in original call; no resampling
+      // keys lives on gameState in Game.tsx; keep structural access
+      gameState.player = updatePlayer(gameState.player, (gameState as any).keys, dt);
+    }
+  } catch { /* no-op */ }
+
+  // Alien bullets (includes enemy shots and non-homing projectiles): per-frame kinematics
+  if (!Array.isArray(gameState.alienBullets)) gameState.alienBullets = [];
+  gameState.alienBullets = gameState.alienBullets.map(updateAlienBullet);
+
+  // Player missiles (share AlienBullet shape): per-frame kinematics
+  if (Array.isArray((gameState as any).playerMissiles)) {
+    (gameState as any).playerMissiles = (gameState as any).playerMissiles.map(updateAlienBullet);
+  }
+
+  // Alien ships: base steering/position update, keep Date.now() argument as in source
+  if (!Array.isArray(gameState.alienShips)) gameState.alienShips = [];
+  gameState.alienShips = gameState.alienShips.map(s => updateAlienShip(s, gameState.player.position, Date.now(), gameState.asteroids));
+
+  // Bonuses: drift and rotation
+  if (!Array.isArray(gameState.bonuses)) gameState.bonuses = [];
+  gameState.bonuses = gameState.bonuses.map(updateBonus);
+
+  // =====================
+  // PHYSICS END (Pass B)
+  // =====================
 }

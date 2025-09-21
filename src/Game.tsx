@@ -3575,7 +3575,7 @@ ctx.strokeStyle = '#ffffff';
         const isAttachedToAsteroid = tractionState.active && (tractionState.phase === 'locking' || tractionState.phase === 'attached');
         
         if (!isAttachedToAsteroid) {
-          gameState.player = updatePlayer(gameState.player, gameState.keys, deltaTime);
+          // Physics integration moved to update(); no-op here.
         }
         
         const curX = gameState.player.position.x;
@@ -3697,12 +3697,10 @@ ctx.strokeStyle = '#ffffff';
 
       // Update bullets
       gameState.bullets = gameState.bullets
-        .map(updateBullet)
         .filter(bullet => bullet.life < bullet.maxLife);
 
       // Update alien bullets
-      gameState.alienBullets = gameState.alienBullets
-        .map((b: AlienBullet) => {
+      gameState.alienBullets = gameState.alienBullets.map(b => {
           // Homing missile steering
           if (b.homing) {
             const speed = Math.hypot(b.velocity.x, b.velocity.y) || 1;
@@ -3742,7 +3740,8 @@ ctx.strokeStyle = '#ffffff';
               b.life = b.maxLife;
             }
           }
-          return updateAlienBullet(b);
+          // Physics integration moved to update(); return as-is.
+          return b;
         })
         .filter(bullet => bullet.life < bullet.maxLife);
 
@@ -3961,8 +3960,7 @@ ctx.strokeStyle = '#ffffff';
           } else {
             // No valid target: fly straight (keep current velocity)
           }
-          // Update physics
-          m = updateAlienBullet(m);
+          // Physics integration moved to update();
           // Append to path history (for true trail) - only for primary (non-extra)
           if (!(m as any).isExtra) {
             const hist = ((m as any).history as Array<{x:number,y:number}>) || []; 
@@ -3987,7 +3985,7 @@ ctx.strokeStyle = '#ffffff';
 
       // Update alien ships and handle their shooting
       gameState.alienShips = gameState.alienShips.map(ship => {
-        const updated = updateAlienShip(ship, gameState.player.position, Date.now(), gameState.asteroids);
+        const updated = ship; // Physics integration moved to update(); ship already updated
         // If UFO collides with an asteroid, knock it off path and set knockedTimer to force recalculation
         for (const a of gameState.asteroids) {
           const dx = a.position.x - updated.position.x;
@@ -4351,8 +4349,7 @@ ctx.strokeStyle = '#ffffff';
       // Update bonuses and handle expiration
       for (let i = gameState.bonuses.length - 1; i >= 0; i--) {
         const bonus = gameState.bonuses[i];
-        const updatedBonus = updateBonus(bonus);
-        gameState.bonuses[i] = updatedBonus;
+        const updatedBonus = bonus; // Physics integration moved to update();
         
         // Check if bonus expired (left screen)
         if (updatedBonus.life >= updatedBonus.maxLife) {
