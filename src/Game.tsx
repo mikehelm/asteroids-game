@@ -119,7 +119,7 @@ const Game: React.FC = () => {
         brightness: 0.3 + Math.random() * 0.7,
         twinkleSpeed: 0.02 + Math.random() * 0.03,
       });
-    }
+      }
     starsRef.current = arr;
   }, []);
 
@@ -193,6 +193,7 @@ const Game: React.FC = () => {
   const missileBurstCountRef = useRef<number>(0);
   const prevStageRef = useRef<number>(1);
   const prevAlienCountRef = useRef<number>(0);
+  
   
   // InfoPopup state and pause behavior
   const [infoOpen, setInfoOpen] = useState(false);
@@ -2961,48 +2962,65 @@ ctx.strokeStyle = '#ffffff';
     const slowMotionFactor = traction.slowMotionActive ? 0.5 : 1.0;
     const deltaTime = 16 * slowMotionFactor;
 
-    // Pass A: compute now/dt once and thread to stubbed update/draw
-    const frameNow = performance.now();
-    const dt = deltaTime;
-    const env = {
-      VITE_ENV: import.meta.env?.VITE_ENV,
-      DEFAULT_BG_BRIGHTNESS,
-      refs: {
-        bgImageRef,
-        bgImageDataRef,
-        bgRawCanvasRef,
-        bgOffsetRef,
-        bgZoomExtraRef,
-        perfModeRef,
-        lastMissileEventRef,
-        trailsEnabledRef,
-        trailsSuspendUntilRef,
-        trailsFadeInStartRef,
-        trailsStrengthRef,
-        bgOpacityRef,
-        bgContrastRef,
-        bgBrightnessRef,
-        effectsApplyRef,
-        // Stars and warp particles
-        starsRef,
-        initialAreaRef,
-        isPausedRef,
-        warpParticlesRef,
-        fadeInActiveRef,
-        fadeInStartRef,
-        distortionRef,
-        levelEndStartRef,
-        INTRO_ZOOM_DUR_MS,
-        START_ZOOM_EXTRA,
-        DUCK_HOLD_MS,
-        backdrops,
-        introZoomStartRef,
-      },
-    } as const;
-    // Forward call sites only; no logic moved yet
-    updateFrame(gameState, frameNow, dt, env, soundSystem);
+    // Define the per-frame body wrapper used below
+    const __runFrameBody = () => {
+      // Pass A: compute now/dt once and thread to stubbed update/draw
+      const frameNow = performance.now();
+      const dt = deltaTime;
+      const env = {
+        VITE_ENV: import.meta.env?.VITE_ENV,
+        DEFAULT_BG_BRIGHTNESS,
+        refs: {
+          bgImageRef,
+          bgImageDataRef,
+          bgRawCanvasRef,
+          bgOffsetRef,
+          bgZoomExtraRef,
+          perfModeRef,
+          lastMissileEventRef,
+          trailsEnabledRef,
+          trailsSuspendUntilRef,
+          trailsFadeInStartRef,
+          trailsStrengthRef,
+          bgOpacityRef,
+          bgContrastRef,
+          bgBrightnessRef,
+          effectsApplyRef,
+          // Stars and warp particles
+          starsRef,
+          initialAreaRef,
+          isPausedRef,
+          warpParticlesRef,
+          fadeInActiveRef,
+          fadeInStartRef,
+          distortionRef,
+          levelEndStartRef,
+          INTRO_ZOOM_DUR_MS,
+          START_ZOOM_EXTRA,
+          DUCK_HOLD_MS,
+          backdrops,
+          introZoomStartRef,
+        },
+      } as const;
+      // Forward call sites only; no logic moved yet
+      updateFrame(gameState, frameNow, dt, env, soundSystem);
 
-    if (gameState.gameRunning && !isPausedRef.current) {
+    // (Spawn handled inside gameRunning block; timing unchanged)
+
+      if (gameState.gameRunning && !isPausedRef.current) {
+        // Spawn asteroids after 1 second (original gate)
+        {
+          const timeSinceStageStart = Date.now() - gameState.stageStartTime;
+          if (timeSinceStageStart >= 1000 && !gameState.asteroidsSpawned) {
+            const newAsteroids = createStageAsteroids(gameState.stage);
+            gameState.asteroids = newAsteroids;
+            gameState.asteroidsSpawned = true;
+            if (__DEV_MODE__) {
+              // eslint-disable-next-line no-console
+              console.log('[spawn-fired]', { stage: gameState.stage, count: gameState.asteroids?.length });
+            }
+          }
+        }
       // Handle respawn countdown: keep ship centered, invulnerable & shielded
       if (gameState.respawning) {
         gameState.player.position = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
@@ -3533,13 +3551,6 @@ ctx.strokeStyle = '#ffffff';
       // Check if it's time to spawn alien ships
       const currentTime = Date.now();
       const timeSinceStageStart = currentTime - gameState.stageStartTime;
-      
-      // Spawn asteroids after 1 second
-      if (timeSinceStageStart >= 1000 && !gameState.asteroidsSpawned) {
-        const newAsteroids = createStageAsteroids(gameState.stage);
-        gameState.asteroids = newAsteroids;
-        gameState.asteroidsSpawned = true;
-      }
       
       // Play scary approach music 2 seconds before alien spawn
       if (timeSinceStageStart >= gameState.stageWaitTime - 2000 && !gameState.alienApproachMusicPlayed) {
@@ -5137,8 +5148,8 @@ ctx.strokeStyle = '#ffffff';
       }
     }
 
-    // Manage level-end audio ducking timeline
-    if (!isMuted) {
+      // Manage level-end audio ducking timeline
+      if (!isMuted) {
       const now = performance.now();
       if (duckPhaseRef.current === 'boost') {
         if (now - duckT0Ref.current >= DUCK_HOLD_MS) {
@@ -5157,41 +5168,43 @@ ctx.strokeStyle = '#ffffff';
       }
     }
 
-    const __runFrameBody = () => {
-      // Render: draw background space image (behind stars and game)
-      // Mapping info for sampling background brightness under stars
+      // 1) Background → returns bgMap
       const bgMap = drawBackground(ctx, gameState, env);
-
-      // Stars (update/draw) immediately after background
+      // 2) Stars (uses bgMap)
       drawStars(ctx, gameState, env, bgMap);
-
-      if (gameState.gameRunning && !isPausedRef.current) {
-        // During tractor beam attach/displaying/pushing, render the player on top of the asteroid
-        const tState = tractionBeamRef.current;
-        const showShipOnTop = tState.active && (tState.phase === 'attached' || tState.phase === 'displaying' || tState.phase === 'pushing');
+      // 3) Entities: showShipOnTop branch
+      {
+        const tBeam = tractionBeamRef.current as any;
+        const showShipOnTop = !!(tBeam && (tBeam.active || (tBeam.onTopEntry && tBeam.onTopEntry.inProgress)));
         if (showShipOnTop) {
-          // Draw asteroids first, then overlay player to ensure visibility
           drawAsteroidsMod(ctx, gameState, env);
           drawPlayerMod(ctx, gameState, env);
         } else {
-          // Default order
           drawPlayerMod(ctx, gameState, env);
           drawAsteroidsMod(ctx, gameState, env);
         }
-        drawBulletsMod(ctx, gameState, env);
-        drawAliensMod(ctx, gameState, env);
-        drawBonusesMod(ctx, gameState, env);
       }
+      // 4) Player bullets
+      drawBulletsMod(ctx, gameState, env);
+      // 5) Aliens
+      drawAliensMod(ctx, gameState, env);
+      // 6) Bonuses
+      drawBonusesMod(ctx, gameState, env);
+      // Also render alien bullets and player missiles before effects (kept from prior wiring)
       drawAlienBulletsMod(ctx, gameState, env);
       if (gameState.playerMissiles && gameState.playerMissiles.length > 0) {
         drawPlayerMissilesMod(ctx, gameState, env);
       }
+      // 7) Explosions
       drawExplosionsMod(ctx, gameState, env);
+      // 8) Debris
       drawDebrisMod(ctx, gameState, env);
-      // Draw refuel station (and handle docking/refill)
-      drawRefuelStation(ctx, gameState);
-      // Draw reward ship (and handle docking reward)
-      drawRewardShip(ctx, gameState);
+      // 9) UI overlays
+      drawTractorOverlay(ctx, gameState, env);
+      // 10) HUD
+      drawHUD(ctx, gameState, env);
+      // (Optional no-op placeholder that was there before)
+      drawFrame(ctx, gameState, frameNow, env);
 
       // Detect HUD-relevant changes and set highlight timers
       const nowHud = performance.now();

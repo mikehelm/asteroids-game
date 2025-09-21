@@ -500,13 +500,24 @@ export function drawHUD(
       const py = gameState.player.position.y;
       const curTX = gameState.worldTileX ?? 0;
       const curTY = gameState.worldTileY ?? 0;
-      const dTX = target.tileX - curTX;
-      const dTY = target.tileY - curTY;
+      // Strict input guards to avoid NaN/Infinity flicker
+      if (
+        target == null || target.position == null ||
+        !isFinite(target.tileX as number) || !isFinite(target.tileY as number) ||
+        !isFinite(target.position.x as number) || !isFinite(target.position.y as number) ||
+        !isFinite(curTX as number) || !isFinite(curTY as number) ||
+        !isFinite(px) || !isFinite(py)
+      ) {
+        return;
+      }
+      const dTX = (target.tileX - curTX) as number;
+      const dTY = (target.tileY - curTY) as number;
       const tileDist = Math.max(Math.abs(dTX), Math.abs(dTY));
       const wraps = Math.max(1, Math.min(9, tileDist));
       const ang = (tileDist > 0)
         ? Math.atan2(dTY, dTX)
         : Math.atan2(target.position.y - py, target.position.x - px);
+      if (!isFinite(ang)) return;
 
       const margin = border * 0.5 + 6;
       const xMin = margin, xMax = CANVAS_WIDTH - margin;
@@ -522,7 +533,7 @@ export function drawHUD(
         const t3 = (yMin - ay) / vy; const x3 = ax + t3 * vx; if (t3 > 0 && x3 >= xMin && x3 <= xMax && t3 < t) t = t3;
         const t4 = (yMax - ay) / vy; const x4 = ax + t4 * vx; if (t4 > 0 && x4 >= xMin && x4 <= xMax && t4 < t) t = t4;
       }
-      if (!isFinite(t) || t === Infinity) return;
+      if (!isFinite(t) || t === Infinity || t <= 0) return;
       ax = ax + vx * t; ay = ay + vy * t;
 
       ctx.save();
