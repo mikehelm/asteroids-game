@@ -117,6 +117,20 @@ export interface AlienBullet extends GameObject {
   owner?: 'alien' | 'player';
 }
 
+// PlayerMissile extends AlienBullet with a few convenience fields used in Game.tsx
+export type PlayerMissileExt = AlienBullet & {
+  isExtra?: boolean;
+  bornAt?: number;
+  phase?: 'straight' | 'homing';
+  straightMs?: number;
+  history?: Array<{ x: number; y: number }>;
+  lastSmokeAt?: number;
+  debugTargetRef?: unknown;
+  debugTargetType?: 'alien' | 'asteroid';
+  debugTargetX?: number;
+  debugTargetY?: number;
+};
+
 // Visual-only debris particle emitted when asteroids shatter
 export interface VisualDebris {
   position: Vector2;
@@ -180,8 +194,8 @@ export interface GameState {
   worldTileX?: number;
   worldTileY?: number;
   // Off-screen special vehicles bound to specific world tiles
-  refuelStation?: { tileX: number; tileY: number; position: Vector2 } | null;
-  rewardShip?: { tileX: number; tileY: number; position: Vector2; velocity?: Vector2; escortTimer?: number; departTimer?: number } | null;
+  refuelStation?: RefuelStation | null;
+  rewardShip?: RewardShip | null;
 }
 
 // Tractor beam phases for discriminated union state
@@ -206,6 +220,22 @@ export interface TractorBeamState {
   textVelY?: number;
   textHoldUntil?: number;
   textFadeUntil?: number;
+}
+
+// World tile-bound helper types
+export interface RefuelStation {
+  tileX: number;
+  tileY: number;
+  position: Vector2;
+}
+
+export interface RewardShip {
+  tileX: number;
+  tileY: number;
+  position: Vector2;
+  velocity?: Vector2;
+  escortTimer?: number;
+  departTimer?: number;
 }
 
 // Minimal track info shape used by UI and sounds API

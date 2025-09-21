@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { startGridScan, advanceGridScanDt, advanceGridRetractDt, isGridComplete } from './tractorBeam/state';
 import { beamUi } from './config/beamUi';
 import mwcLogo from '../images/Made With Chat Logo.png';
-import { GameState, Player, Bullet, AlienShip, AlienBullet, Explosion, Bonus, Asteroid, VisualDebris } from './types';
+import { GameState, Player, Bullet, AlienShip, AlienBullet, Explosion, Bonus, Asteroid, VisualDebris, PlayerMissileExt } from './types';
 import { createPlayer } from './gameObjects';
 import { soundSystem } from './sounds';
 import { 
@@ -39,26 +39,51 @@ import { ExplosionDistortionManager } from './effects/ExplosionDistortion';
 import TitleBanner from './ui/TitleBanner';
 import MusicDock from './ui/MusicDock';
 import InfoPopup from './ui/InfoPopup';
+import DebugPanel from './ui/DebugPanel';
 import { emitUiEvent } from './events';
 import {
   initTractorBeamState,
   renderTractorOverlay,
   renderFlipit,
 } from './tractorBeam';
+import { DEV_SUMMARY_FRAMES, DEBUG_PANEL_MAX, DEFAULT_BG_BRIGHTNESS } from './constants';
+import { update as updateFrame } from './gameLoop/update';
+import {
+  draw as drawFrame,
+  drawBackground,
+  drawStars,
+  drawDebris as drawDebrisMod,
+  drawExplosions as drawExplosionsMod,
+  drawPlayer as drawPlayerMod,
+  drawAsteroids as drawAsteroidsMod,
+  drawAliens as drawAliensMod,
+  drawBullets as drawBulletsMod,
+  drawBonuses as drawBonusesMod,
+} from './gameLoop/draw';
 
-// Local narrow helper types to avoid `any` while preserving runtime shape
-type PlayerMissileExt = AlienBullet & {
-  isExtra?: boolean;
-  bornAt?: number;
-  phase?: 'straight' | 'homing';
-  straightMs?: number;
-  history?: Array<{ x: number; y: number }>;
-  lastSmokeAt?: number;
-  debugTargetRef?: unknown;
-  debugTargetType?: 'alien' | 'asteroid';
-  debugTargetX?: number;
-  debugTargetY?: number;
-};
+// ===== Lightweight Dev Logger (env-guarded) =====
+type NodeProc = { env?: { GAME_MODE?: string } };
+const nodeGameMode: string | undefined =
+  ('process' in globalThis ? (globalThis as unknown as { process?: NodeProc }).process?.env?.GAME_MODE : undefined);
+
+const __DEV_MODE__ =
+  ((import.meta.env?.VITE_ENV as string | undefined) ?? 'local') !== 'prod' &&
+  nodeGameMode !== 'production';
+
+let __frameCounter = 0;
+
+if (__DEV_MODE__) {
+  // Should print once on reload if dev mode is ON
+  // (VITE_ENV and GAME_MODE resolved at build/runtime)
+  // If you don't see this in DevTools Console, the guard is false.
+  console.log('Dev logger active', {
+    VITE_ENV: import.meta.env?.VITE_ENV,
+    GAME_MODE: nodeGameMode,
+  });
+}
+// ===============================================
+
+// Local narrow helper types moved to src/types.ts (PlayerMissileExt)
 type TractionAug = ReturnType<typeof initTractorBeamState> & {
   gameState?: { stage?: number };
   decodeExplosionsFired?: boolean;
@@ -78,6 +103,8 @@ const Game: React.FC = () => {
   // Starfield scaling helpers
   const initialAreaRef = useRef<number>(CANVAS_WIDTH * CANVAS_HEIGHT);
   const initialStarCountRef = useRef<number>(200);
+  // Dev: in-app debug lines buffer (env-gated usage)
+  const debugLinesRef = useRef<string[]>([]);
 
   const regenerateStars = useCallback((count: number) => {
     const arr: Array<{x:number;y:number;brightness:number;twinkleSpeed:number}> = [];
@@ -1560,6 +1587,23 @@ const Game: React.FC = () => {
     };
   }, [handleKeyDown, handleKeyUp]);
 
+  // Dev-only: hotkey to push a manual debug line into DebugPanel
+  useEffect(() => {
+    if (!__DEV_MODE__) return;
+    const onDevKey = (e: KeyboardEvent) => {
+      // Backtick ` or 'd' key will dump a quick summary line
+      if (e.key === '`' || e.key === 'd' || e.key === 'D') {
+        const gs = gameStateRef.current;
+        const tractorPhase = (gs as unknown as { tractorBeam?: { phase?: string } })?.tractorBeam?.phase ?? 'idle';
+        const bg = (gs as unknown as { bgBrightness?: number })?.bgBrightness ?? 0.4;
+        const summary = `[manual] f=${__frameCounter} ast=${gs?.asteroids?.length ?? 0} bul=${gs?.bullets?.length ?? 0} deb=${gs?.visualDebris?.length ?? 0} exp=${gs?.explosions?.length ?? 0} phase=${tractorPhase} bg=${bg}`;
+        const arr = debugLinesRef.current; arr.push(summary); if (arr.length > 200) arr.splice(0, arr.length - 200);
+      }
+    };
+    window.addEventListener('keydown', onDevKey);
+    return () => { window.removeEventListener('keydown', onDevKey); };
+  }, []);
+
   // Difficulty settings helper
   const getDifficultySettings = useCallback(() => {
     if (difficulty === 'easy') {
@@ -2945,11 +2989,44 @@ ctx.strokeStyle = '#ffffff';
 
     const gameState = gameStateRef.current;
 
+    // Dev: log every ~30 frames (guarded, no-op in production)
+    if (__DEV_MODE__ && (++__frameCounter % 30 === 0)) {
+      const gs = gameStateRef.current as any;
+      const tractorPhase = gs?.tractorBeam?.phase ?? 'idle';
+
+      console.log({
+        frame: __frameCounter,
+        asteroidCount: gs?.asteroids?.length ?? 0,
+        bulletCount: gs?.bullets?.length ?? 0,
+        debrisCount: gs?.visualDebris?.length ?? 0,
+        explosionsCount: gs?.explosions?.length ?? 0,
+        tractorPhase,
+        bgBrightness: gs?.bgBrightness ?? DEFAULT_BG_BRIGHTNESS,
+      });
+    }
+
     // Skip gameplay updates if UI is paused (InfoPopup open), but continue rendering
     if (uiPausedRef.current) {
       // Still render the current frame but skip all game state updates
       drawUI(ctx, gameState);
-      animationFrameRef.current = requestAnimationFrame(gameLoop);
+      // Dev: add a lightweight summary roughly every 30 seconds (60fps * 30s = 1800 frames)
+    if (__DEV_MODE__) {
+      __frameCounter++;
+      if (__frameCounter % 1800 === 0) {
+        const gs = gameStateRef.current;
+        const tractorPhase = gs?.tractorBeam?.phase ?? 'idle';
+        const summary = `f=${__frameCounter} ast=${gs?.asteroids?.length ?? 0} bul=${gs?.bullets?.length ?? 0} deb=${gs?.visualDebris?.length ?? 0} exp=${gs?.explosions?.length ?? 0} phase=${tractorPhase} bg=${(gs as any)?.bgBrightness ?? 0.4}`;
+        // Mirror to console for parity with existing logs
+        // eslint-disable-next-line no-console
+        console.log('[summary]', summary);
+        // Push to in-app panel buffer (cap 200)
+        const arr = debugLinesRef.current;
+        arr.push(summary);
+        if (arr.length > 200) arr.splice(0, arr.length - 200);
+      }
+    }
+
+    animationFrameRef.current = requestAnimationFrame(gameLoop);
       return;
     }
 
@@ -2989,6 +3066,52 @@ ctx.strokeStyle = '#ffffff';
     const traction = tractionBeamRef.current;
     const slowMotionFactor = traction.slowMotionActive ? 0.5 : 1.0;
     const deltaTime = 16 * slowMotionFactor;
+
+    // Pass A: compute now/dt once and thread to stubbed update/draw
+    const frameNow = performance.now();
+    const dt = deltaTime;
+    const env = {
+      VITE_ENV: import.meta.env?.VITE_ENV,
+      DEFAULT_BG_BRIGHTNESS,
+      refs: {
+        bgImageRef,
+        bgImageDataRef,
+        bgRawCanvasRef,
+        bgOffsetRef,
+        bgZoomExtraRef,
+        perfModeRef,
+        lastMissileEventRef,
+        trailsEnabledRef,
+        trailsSuspendUntilRef,
+        trailsFadeInStartRef,
+        trailsStrengthRef,
+        bgOpacityRef,
+        bgContrastRef,
+        bgBrightnessRef,
+        effectsApplyRef,
+        // Stars and warp particles
+        starsRef,
+        initialAreaRef,
+        isPausedRef,
+        warpParticlesRef,
+        // Entity draw locals for Pass A shim (player now implemented in module)
+        drawAsteroidsLocal: drawAsteroids,
+        drawAlienShipsLocal: drawAlienShips,
+        drawBulletsLocal: drawBullets,
+        drawBonusesLocal: drawBonuses,
+        fadeInActiveRef,
+        fadeInStartRef,
+        distortionRef,
+        levelEndStartRef,
+        INTRO_ZOOM_DUR_MS,
+        START_ZOOM_EXTRA,
+        DUCK_HOLD_MS,
+        backdrops,
+        introZoomStartRef,
+      },
+    } as const;
+    // Forward call sites only; no logic moved yet
+    updateFrame(gameState, frameNow, dt, env, soundSystem);
 
     if (gameState.gameRunning && !isPausedRef.current) {
       // Handle respawn countdown: keep ship centered, invulnerable & shielded
@@ -5150,352 +5273,10 @@ ctx.strokeStyle = '#ffffff';
 
     // Render: draw background space image (behind stars and game)
     // Mapping info for sampling background brightness under stars
-    let bgMap: { sx: number; sy: number; sw: number; sh: number; iw: number; ih: number } | null = null;
-    const bg = bgImageRef.current;
-    if (bg && bg.complete && bg.naturalWidth > 0) {
-      const iw = bg.naturalWidth;
-      const ih = bg.naturalHeight;
-      // Update parallax offset based on ship velocity (20% of star parallax)
-      if (gameState.gameRunning) {
-        const shipVelocity = gameState.player.velocity;
-        const moving = Math.hypot(shipVelocity.x, shipVelocity.y) > 0.01;
-        const parallaxFactor = (moving ? 2.0 : 1.0) * 0.02; // 20% of stars' 0.1 factor
-        const wantX = bgOffsetRef.current.x - shipVelocity.x * parallaxFactor;
-        const wantY = bgOffsetRef.current.y - shipVelocity.y * parallaxFactor;
-        bgOffsetRef.current.x = wantX;
-        bgOffsetRef.current.y = wantY;
-      }
+    const bgMap = drawBackground(ctx, gameState, env);
 
-      // If we're fading out to black for level end, also zoom the background towards us
-      let pOutEarly = 0;
-      if (gameState.levelComplete && levelEndStartRef.current > 0) {
-        const nowTsEarly = performance.now();
-        pOutEarly = Math.max(0, Math.min(1, (nowTsEarly - levelEndStartRef.current) / DUCK_HOLD_MS));
-      }
-      // Accelerate zoom-in (ease-in) and increase intensity to ~+240%
-      const zoomEase = pOutEarly * pOutEarly; // accelerate
-      // Intro zoom: start at +20% and ease back to 0 over 2s
-      const tIntro = Math.max(0, Math.min(1, (performance.now() - introZoomStartRef.current) / INTRO_ZOOM_DUR_MS));
-      const introExtra = START_ZOOM_EXTRA * (1 - tIntro);
-      const baseZoom = (1.2 + bgZoomExtraRef.current) * (1 + introExtra) * (1 + zoomEase * 2.4);
-      const sw = Math.max(10, iw / baseZoom);
-      const sh = Math.max(10, ih / baseZoom);
-      // Map offset as pixels in source space
-      let sx = iw * 0.5 - sw * 0.5 + bgOffsetRef.current.x;
-      let sy = ih * 0.5 - sh * 0.5 + bgOffsetRef.current.y;
-
-      // Clamp to image bounds; if clamped, accumulate extra zoom slightly to simulate motion
-      let clamped = false;
-      if (sx < 0) { sx = 0; clamped = true; }
-      if (sy < 0) { sy = 0; clamped = true; }
-      if (sx + sw > iw) { sx = iw - sw; clamped = true; }
-      if (sy + sh > ih) { sy = ih - sh; clamped = true; }
-      if (clamped) {
-        bgZoomExtraRef.current = Math.min(bgZoomExtraRef.current + 0.005, 0.12); // up to +12% more
-      } else {
-        bgZoomExtraRef.current = Math.max(0, bgZoomExtraRef.current - 0.008); // decay back
-      }
-
-      // Derive performance-active flag: user perfMode OR UFO present OR recent missile event
-      const ufoPresent = (gameState.alienShips?.length || 0) > 0;
-      const nowPerf = performance.now();
-      const perfActive = (perfModeRef.current || ufoPresent || (nowPerf - lastMissileEventRef.current) < 1500);
-
-      // Motion Trails: gently fade prior frame, but suspend during missile effects and fade back in
-      if (trailsEnabledRef.current) {
-        const nowFade = performance.now();
-        let trailsAlpha = 1;
-        if (nowFade < trailsSuspendUntilRef.current || perfActive) {
-          trailsAlpha = 0; // fully suspended
-        } else if (trailsFadeInStartRef.current > 0 || trailsSuspendUntilRef.current > 0) {
-          if (trailsFadeInStartRef.current === 0) trailsFadeInStartRef.current = nowFade;
-          const t = Math.max(0, Math.min(1, (nowFade - trailsFadeInStartRef.current) / 600));
-          trailsAlpha = t;
-        }
-        if (trailsAlpha > 0) {
-          ctx.save();
-          const cap = perfActive ? 0.18 : 0.25;
-          const base = Math.max(0.08, Math.min(cap, trailsStrengthRef.current));
-          const fade = base * trailsAlpha;
-          ctx.globalAlpha = fade;
-          ctx.fillStyle = '#000000';
-          ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-          ctx.restore();
-        }
-      }
-
-      // Draw with current opacity/filters, factoring crossfade states
-      const nowTs = performance.now();
-      const oBase = Math.max(0, Math.min(1, bgOpacityRef.current));
-      const c = Math.max(0.0, bgContrastRef.current);
-      const b = Math.max(0.0, bgBrightnessRef.current);
-
-      const effBg = effectsApplyRef.current;
-      const useFxBg = effBg.background;
-      // Suppress background filters during heavy scenes
-      const suppressBgFilter = perfActive;
-      if (fadeInActiveRef.current) {
-        // Fade in new backdrop from black
-        const pIn = Math.max(0, Math.min(1, (nowTs - fadeInStartRef.current) / 2000));
-        // Clear to black
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        // Draw bg increasing alpha
-        ctx.save();
-        ctx.globalAlpha = (useFxBg ? oBase : 1) * pIn;
-        ctx.filter = (useFxBg && !suppressBgFilter) ? `contrast(${c * 100}%) brightness(${b * 100}%)` : 'none';
-        ctx.drawImage(bg, sx, sy, sw, sh, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        ctx.restore();
-        // Capture background and apply distortion pulses BEFORE drawing gameplay sprites
-        if (distortionRef.current) {
-          try {
-            const bgBuf = distortionRef.current.captureBackground(ctx);
-            const nowTs = performance.now();
-            const coarse = !!perfModeRef.current; // coarser grid when perf mode is active
-            distortionRef.current.renderSimple(ctx, bgBuf, nowTs, { debugRing: false, perfCoarse: coarse });
-          } catch {}
-        }
-        if (pIn >= 1) {
-          fadeInActiveRef.current = false;
-        }
-      } else {
-        // Normal draw
-        ctx.save();
-        // When trails are disabled and drawing with partial opacity, clear the canvas first to avoid residual trails
-        if (!trailsEnabledRef.current && useFxBg && oBase < 1) {
-          ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        }
-        ctx.globalAlpha = useFxBg ? oBase : 1;
-        ctx.filter = useFxBg ? `contrast(${c * 100}%) brightness(${b * 100}%)` : 'none';
-        ctx.drawImage(bg, sx, sy, sw, sh, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-        ctx.restore();
-        // Capture background and apply distortion pulses in normal draw branch as well
-        if (distortionRef.current) {
-          try {
-            const bgBuf = distortionRef.current.captureBackground(ctx);
-            const nowTs = performance.now();
-            const coarse = !!perfModeRef.current; // coarser grid when perf mode is active
-            distortionRef.current.renderSimple(ctx, bgBuf, nowTs, { debugRing: true, perfCoarse: coarse });
-          } catch {}
-        }
-        // If level is ending, fade to black over the duck hold duration
-        if (gameState.levelComplete && levelEndStartRef.current > 0) {
-          const pOut = Math.max(0, Math.min(1, (nowTs - levelEndStartRef.current) / DUCK_HOLD_MS));
-          if (pOut > 0) {
-            ctx.save();
-            ctx.globalAlpha = pOut;
-            ctx.fillStyle = '#000000';
-            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-            ctx.restore();
-          }
-        }
-      }
-
-      // Cache mapping values for star masking
-      bgMap = { sx, sy, sw, sh, iw, ih };
-    } else {
-      // With true page wallpaper, keep canvas transparent; only fill if no backdrop is available at all
-      if (!backdrops || backdrops.length === 0) {
-        ctx.fillStyle = '#000011';
-        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      } else {
-        // Transparent background lets body wallpaper show through
-        ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      }
-    }
-    // Reset any filter/alpha side-effects before drawing stars/objects
-    ctx.globalAlpha = 1;
-    ctx.filter = 'none';
-
-    // Update dynamic stars with parallax and twinkling
-    if (gameState.gameRunning) {
-      const shipVelocity = gameState.player.velocity;
-      const moving = Math.hypot(shipVelocity.x, shipVelocity.y) > 0.01;
-      const speedFactor = moving ? 2.0 : 1.0; // 2x when flying
-      starsRef.current.forEach(star => {
-        const moveFactorX = 0.1 * speedFactor;
-        const moveFactorY = 0.1 * speedFactor;
-        star.x -= shipVelocity.x * moveFactorX;
-        star.y -= shipVelocity.y * moveFactorY;
-        // Wrap
-        if (star.x < 0) star.x += CANVAS_WIDTH;
-        if (star.x > CANVAS_WIDTH) star.x -= CANVAS_WIDTH;
-        if (star.y < 0) star.y += CANVAS_HEIGHT;
-        if (star.y > CANVAS_HEIGHT) star.y -= CANVAS_HEIGHT;
-      });
-    }
-
-    // Draw stars with twinkling; during warp draw as dim points (streaks handled by warp particles)
-    const bgData = bgImageDataRef.current;
-    const map = bgMap;
-    const centerX = CANVAS_WIDTH / 2;
-    const centerY = CANVAS_HEIGHT / 2;
-    starsRef.current.forEach(star => {
-      // Mask: only draw if underlying bg pixel is dark
-      let draw = true;
-      if (bgData && map) {
-        const u = map.sx + (star.x / CANVAS_WIDTH) * map.sw;
-        const v = map.sy + (star.y / CANVAS_HEIGHT) * map.sh;
-        const ix = Math.max(0, Math.min(map.iw - 1, Math.floor(u)));
-        const iy = Math.max(0, Math.min(map.ih - 1, Math.floor(v)));
-        const idx = (iy * map.iw + ix) * 4;
-        const r = bgData.data[idx];
-        const g = bgData.data[idx + 1];
-        const b = bgData.data[idx + 2];
-        const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-        draw = luma < 0.20; // only in dark zones
-      }
-      if (!draw) return;
-
-      const warp = gameState.warpEffect;
-      if (warp > 0) {
-        // During warp, draw small dim points; main motion comes from warp particles below
-        const alpha = Math.min(0.6, star.brightness * 0.4);
-        const size = 1;
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-        ctx.fillRect(star.x, star.y, size, size);
-      } else {
-        const alpha = star.brightness;
-        const size = star.brightness > 0.8 ? 2 : 1;
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
-        ctx.fillRect(star.x, star.y, size, size);
-      }
-    });
-
-    // Warp particles: spawn from center and fly outward to simulate passing stars
-    if (gameState.warpEffect > 0) {
-      // Limit warp particle effect to 2 seconds from level end start
-      const sinceLevelEnd = levelEndStartRef.current > 0 ? (performance.now() - levelEndStartRef.current) : 0;
-      if (sinceLevelEnd > 2000) {
-        // Past 2 seconds: stop spawning/drawing particles
-        if (warpParticlesRef.current.length) warpParticlesRef.current.length = 0;
-      } else {
-      // Easing for spawn and speed so it starts slow and accelerates
-      const t = Math.max(0, Math.min(1, gameState.warpEffect));
-      const easeIn = (x: number) => x * x;
-      const eased = easeIn(t);
-      // Reduce further: about 35% of previous, scaled by easing
-      const spawnCount = Math.floor((30 + t * 90) * 0.35 * Math.max(0.4, eased));
-      for (let i = 0; i < spawnCount; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        // Start slow, accelerate with eased t
-        const speed = 4 + eased * 26 + Math.random() * 5;
-        const vx = Math.cos(angle) * speed;
-        const vy = Math.sin(angle) * speed;
-        // Spawn with a hole in the middle (ring start radius)
-        const holeR = 50; // radius of central hole
-        const r = holeR + Math.random() * 20; // start outside the hole with small jitter band
-        const x = centerX + Math.cos(angle) * r;
-        const y = centerY + Math.sin(angle) * r;
-        // Slightly shorter lifetimes so they fade sooner in the distance
-        warpParticlesRef.current.push({ x, y, vx, vy, life: 0, maxLife: 12 + Math.floor(Math.random() * 6), prevX: x, prevY: y });
-      }
-      // Update and draw
-      ctx.strokeStyle = '#ffffff';
-      // Local effect params
-      const effWarp = effectsApplyRef.current;
-      const fxAlpha = Math.max(0, Math.min(1, bgOpacityRef.current));
-      const fxC = Math.max(0.0, bgContrastRef.current);
-      const fxB = Math.max(0.0, bgBrightnessRef.current);
-      // Apply effects to warp trails if enabled
-      const baseWarpAlpha = effWarp.warpTrails ? fxAlpha : 1;
-      if (effWarp.warpTrails) {
-        ctx.save();
-        ctx.filter = `contrast(${fxC * 100}%) brightness(${fxB * 100}%)`;
-      }
-      for (let i = warpParticlesRef.current.length - 1; i >= 0; i--) {
-        const p = warpParticlesRef.current[i];
-        p.prevX = p.x; p.prevY = p.y;
-        p.x += p.vx; p.y += p.vy;
-        p.life++;
-        // Remove if off-screen or life exceeded
-        const off = p.x < -20 || p.x > CANVAS_WIDTH + 20 || p.y < -20 || p.y > CANVAS_HEIGHT + 20;
-        if (p.life > p.maxLife || off) {
-          warpParticlesRef.current.splice(i, 1);
-          continue;
-        }
-        // Alpha tapers with life; small streak from previous to current
-        const t = p.life / p.maxLife;
-        let alpha = Math.max(0, 1 - t) * Math.min(1, 0.4 + eased * 0.6);
-        // Fade at edges of screen
-        const edgeFade = 80; // px fade width at edges
-        const dxEdge = Math.min(p.x, CANVAS_WIDTH - p.x);
-        const dyEdge = Math.min(p.y, CANVAS_HEIGHT - p.y);
-        const edgeFactor = Math.max(0, Math.min(1, Math.min(dxEdge, dyEdge) / edgeFade));
-        alpha *= edgeFactor;
-        ctx.globalAlpha = alpha * baseWarpAlpha;
-        ctx.lineWidth = 1 + Math.min(2, eased * 1.2);
-        // Shorter streak: draw only a fraction behind current position to avoid long smears
-        const sx = p.x - p.vx * 0.4;
-        const sy = p.y - p.vy * 0.4;
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-      }
-    } else if (warpParticlesRef.current.length) {
-      // Clear any leftovers when not in warp
-      warpParticlesRef.current.length = 0;
-    }
-    
-    // Twinkling stars (background layer)
-    {
-      const stars = starsRef.current;
-      if (stars && stars.length) {
-        const now = performance.now();
-        ctx.save();
-        ctx.fillStyle = '#ffffff';
-        // Scale star size slightly with area ratio so stars appear a bit larger when the playable area grows
-        const areaRatio = Math.max(1, (CANVAS_WIDTH * CANVAS_HEIGHT) / Math.max(1, initialAreaRef.current));
-        const starSize = Math.min(2, 1 + 0.35 * Math.sqrt(areaRatio));
-        // Local effect params
-        const effStars = effectsApplyRef.current;
-        const fxAlphaS = Math.max(0, Math.min(1, bgOpacityRef.current));
-        const fxCS = Math.max(0.0, bgContrastRef.current);
-        const fxBS = Math.max(0.0, bgBrightnessRef.current);
-        // Apply effects to stars if enabled
-        const baseStarAlpha = effStars.stars ? fxAlphaS : 1;
-        if (effStars.stars) {
-          ctx.filter = `contrast(${fxCS * 100}%) brightness(${fxBS * 100}%)`;
-        }
-        for (let i = 0; i < stars.length; i++) {
-          const s = stars[i];
-          // Subtle parallax relative to player
-          const x = ((s.x - gameState.player.position.x * 0.01) % CANVAS_WIDTH + CANVAS_WIDTH) % CANVAS_WIDTH;
-          const y = ((s.y - gameState.player.position.y * 0.01) % CANVAS_HEIGHT + CANVAS_HEIGHT) % CANVAS_HEIGHT;
-          // Twinkle between 0.2..1.0 based on speed and per-star phase via index
-          const phase = i * 1.7; // deterministic per-star offset
-          const tw = 0.2 + 0.8 * (0.5 + 0.5 * Math.sin(now * s.twinkleSpeed * 0.006 + phase));
-          ctx.globalAlpha = (tw * s.brightness) * baseStarAlpha;
-          ctx.fillRect(x, y, starSize, starSize);
-        }
-        ctx.restore();
-      }
-    }
-
-    // Add some larger, more distant stars that move slower
-    if (gameState.gameRunning && !isPausedRef.current) {
-      const effDist = effectsApplyRef.current;
-      // Local effect params
-      const fxAlphaD = Math.max(0, Math.min(1, bgOpacityRef.current));
-      const fxCD = Math.max(0.0, bgContrastRef.current);
-      const fxBD = Math.max(0.0, bgBrightnessRef.current);
-      // Apply effects to distant stars if enabled
-      const baseDistAlpha = effDist.distantStars ? fxAlphaD : 1;
-      ctx.save();
-      if (effDist.distantStars) {
-        ctx.filter = `contrast(${fxCD * 100}%) brightness(${fxBD * 100}%)`;
-      }
-      ctx.fillStyle = `rgba(200, 200, 255, ${0.3 * baseDistAlpha})`;
-      for (let i = 0; i < 20; i++) {
-        const x = ((i * 127 - gameState.player.position.x * 0.02) % CANVAS_WIDTH + CANVAS_WIDTH) % CANVAS_WIDTH;
-        const y = ((i * 83 - gameState.player.position.y * 0.02) % CANVAS_HEIGHT + CANVAS_HEIGHT) % CANVAS_HEIGHT;
-        ctx.fillRect(x, y, 1, 1);
-      }
-      ctx.restore();
-    }
+    // Stars (update/draw) immediately after background
+    drawStars(ctx, gameState, env, bgMap);
 
     if (gameState.gameRunning && !isPausedRef.current) {
       // During tractor beam attach/displaying/pushing, render the player on top of the asteroid
@@ -5503,25 +5284,25 @@ ctx.strokeStyle = '#ffffff';
       const showShipOnTop = tState.active && (tState.phase === 'attached' || tState.phase === 'displaying' || tState.phase === 'pushing');
       if (showShipOnTop) {
         // Draw asteroids first, then overlay player to ensure visibility
-        drawAsteroids(ctx, gameState);
-        drawPlayer(ctx, gameState);
+        drawAsteroidsMod(ctx, gameState, env);
+        drawPlayerMod(ctx, gameState, env);
       } else {
         // Default order
-        drawPlayer(ctx, gameState);
-        drawAsteroids(ctx, gameState);
+        drawPlayerMod(ctx, gameState, env);
+        drawAsteroidsMod(ctx, gameState, env);
       }
-      drawBullets(ctx, gameState.bullets);
-      drawAlienShips(ctx, gameState.alienShips);
-      drawBonuses(ctx, gameState.bonuses);
+      drawBulletsMod(ctx, gameState, env);
+      drawAliensMod(ctx, gameState, env);
+      drawBonusesMod(ctx, gameState, env);
     }
     drawAlienBullets(ctx, gameState.alienBullets);
     if (gameState.playerMissiles && gameState.playerMissiles.length > 0) {
       drawAlienBullets(ctx, gameState.playerMissiles);
     }
-    drawExplosions(ctx, gameState.explosions);
+    drawExplosionsMod(ctx, gameState, env);
     // Visual-only debris
     updateVisualDebris();
-    drawVisualDebris(ctx);
+    drawDebrisMod(ctx, gameState, env);
     // Draw refuel station (and handle docking/refill)
     drawRefuelStation(ctx, gameState);
     // Draw reward ship (and handle docking reward)
@@ -5694,6 +5475,23 @@ ctx.strokeStyle = '#ffffff';
     if (!gameState.gameRunning && gameState.keys['r']) {
       initGame();
     }
+
+    // Dev: add a lightweight summary roughly every 30 seconds (60fps * 30s = DEV_SUMMARY_FRAMES)
+    if (__DEV_MODE__) {
+      __frameCounter++;
+      if (__frameCounter % DEV_SUMMARY_FRAMES === 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const gs = gameStateRef.current as any;
+        const tractorPhase = gs?.tractorBeam?.phase ?? 'idle';
+        const summary = `f=${__frameCounter} ast=${gs?.asteroids?.length ?? 0} bul=${gs?.bullets?.length ?? 0} deb=${gs?.visualDebris?.length ?? 0} exp=${gs?.explosions?.length ?? 0} phase=${tractorPhase} bg=${gs?.bgBrightness ?? DEFAULT_BG_BRIGHTNESS}`;
+        // eslint-disable-next-line no-console
+        console.log('[summary]', summary);
+        const arr = debugLinesRef.current; arr.push(summary); if (arr.length > DEBUG_PANEL_MAX) arr.splice(0, arr.length - DEBUG_PANEL_MAX);
+      }
+    }
+
+    // Forward draw stub (no-op in Pass A); placed near end of frame
+    drawFrame(ctx, gameState, frameNow, env);
 
     animationFrameRef.current = requestAnimationFrame(gameLoop);
     // Note: we intentionally rely on stable refs (e.g., isPausedRef, isMutedRef, musicUserPausedRef)
@@ -5872,6 +5670,11 @@ ctx.strokeStyle = '#ffffff';
 
       {/* Info popup modal */}
       <InfoPopup open={infoOpen} onClose={() => setInfoOpen(false)} />
+
+      {/* In-app Debug Panel (dev-only) */}
+      {__DEV_MODE__ && (
+        <DebugPanel lines={debugLinesRef.current} visible={true} max={200} />
+      )}
 
       {/* Debug Panel Toggle Button - Only show in development */}
       {import.meta.env.DEV && (
