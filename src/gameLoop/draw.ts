@@ -1,7 +1,11 @@
 import type { GameState, Asteroid } from '../types';
+import { renderTractorOverlay, renderFlipit } from '../tractorBeam';
+import { beamUi } from '../config/beamUi';
+import { createBlackPuffExplosion } from '../gameObjects';
 export type EnvLike = { refs: Record<string, unknown> };
 
 // Pass A stub: forwarder only. Do not resample time here.
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function draw(
   _ctx: CanvasRenderingContext2D,
   _gameState: GameState,
@@ -12,7 +16,321 @@ export function draw(
   void _ctx; void _gameState; void _now; void _env;
 }
 
+// Tractor overlay + Flipit text rendering (moved from Game.tsx)
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
+export function drawTractorOverlay(
+  ctx: CanvasRenderingContext2D,
+  gameState: GameState,
+  env: EnvLike
+): void {
+  const r = env.refs as any;
+  const traction = r.tractionBeamRef?.current;
+  if (!traction) return;
+  const CANVAS_WIDTH = ctx.canvas.width;
+  const CANVAS_HEIGHT = ctx.canvas.height;
+  const tractionAugGuard = traction as any;
+  if (traction.active || (tractionAugGuard.textHoldUntil != null && performance.now() < tractionAugGuard.textHoldUntil)) {
+    const now = performance.now();
+    // Provide current stage snapshot for render (non-behavioral)
+    const tractionAug = traction as any;
+    tractionAug.gameState = { stage: gameState.stage };
+    // Use tractor beam render helpers
+    renderTractorOverlay(ctx, traction, now);
+    renderFlipit(ctx, traction, now, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    // ---- Decode explosion trigger (one-shot) ----
+    const t = r.tractionBeamRef?.current;
+    if (t.phase === 'displaying' && t.decodeStartTime) {
+      const combinedStart = t.decodeStartTime + beamUi.DECODE_DURATION_MS + beamUi.MULTIPLIER_DELAY_MS + 400;
+      const tAug = t as any;
+      if (!tAug.decodeExplosionsFired && now >= combinedStart) {
+        tAug.decodeExplosionsFired = true;
+        ctx.save();
+        ctx.font = 'bold 22px Arial';
+        const cx = CANVAS_WIDTH / 2;
+        const cy = CANVAS_HEIGHT / 2 - 40;
+        const pctStr = `${(t.flipitChance * 100).toFixed(1)}%`;
+        const stage = gameState.stage;
+        const multStr = `×${stage}`;
+        const pctW = ctx.measureText(pctStr).width;
+        const multW = ctx.measureText(multStr).width;
+        const pctX = cx;
+        const multX = pctX + pctW / 2 + beamUi.GAP_PCT_TO_MULT + multW / 2;
+        const y = cy;
+        // Small black puffs along the LEFT text (percent) from left→right
+        const leftStart = pctX - pctW / 2;
+        const samples = Math.max(3, Math.round(pctW / 40));
+        for (let i = 0; i < samples; i++) {
+          const sx = leftStart + (i / Math.max(1, samples - 1)) * pctW;
+          gameState.explosions.push(createBlackPuffExplosion({ x: sx, y }, 6 + (i % 3)));
+        }
+        // Multiplier burst at its center
+        const mx = multX;
+        for (let k = 0; k < 12; k++) {
+          gameState.explosions.push(createBlackPuffExplosion({ x: mx, y }, 8));
+        }
+        ctx.restore();
+      }
+    }
+  }
+}
+
+// HUD rendering (moved from Game.tsx drawUI)
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
+export function drawHUD(
+  ctx: CanvasRenderingContext2D,
+  gameState: GameState,
+  env: EnvLike
+): void {
+  const r = env.refs as any;
+  const CANVAS_WIDTH = ctx.canvas.width;
+  const CANVAS_HEIGHT = ctx.canvas.height;
+  const now = performance.now();
+  const baseAlpha = 0.5;
+
+  // Score
+  ctx.save();
+  ctx.globalAlpha = baseAlpha;
+  ctx.fillStyle = (now < r.scoreDropUntilRef.current) ? '#ff5555' : '#ffffff';
+  ctx.fillText(`Score: ${gameState.score}`, 20, 40);
+  ctx.restore();
+
+  // Stage label
+  ctx.save();
+  ctx.globalAlpha = baseAlpha;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`Stage: ${gameState.stage}`, 20, 70);
+  ctx.restore();
+
+  // Missile popups flying to HUD
+  if (gameState.missilePopups && gameState.missilePopups.length > 0) {
+    for (const p of gameState.missilePopups) {
+      const age = Date.now() - p.start;
+      const alpha = p.phase === 'hover' ? 1.0 : Math.max(0.6, 1.0 - age / 1600);
+      const sc = typeof p.scale === 'number' ? p.scale! : 1.0;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.scale(sc, sc);
+      ctx.globalAlpha = alpha;
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 8;
+      ctx.lineWidth = 2;
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(10, 0);
+      ctx.lineTo(-8, -5);
+      ctx.lineTo(-8, 5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(-11, 0, 3, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Lives (top-right)
+  const livesText = `Lives: ${gameState.lives}`;
+  const metrics = ctx.measureText(livesText);
+  ctx.save();
+  ctx.globalAlpha = (now < r.livesBrightUntilRef.current) ? 1.0 : baseAlpha;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(livesText, CANVAS_WIDTH - metrics.width - 20, 40);
+  ctx.restore();
+
+  // Health bar set (with healing glow/pass)
+  const healthBarWidth = 200;
+  const healthBarHeight = 20;
+  const healthPercentage = gameState.player.health / gameState.player.maxHealth;
+  const healthBright = now < r.healthBrightUntilRef.current;
+  const healthDrop = now < r.healthDropUntilRef.current;
+
+  ctx.save();
+  ctx.globalAlpha = healthBright ? 1.0 : baseAlpha;
+  ctx.fillStyle = '#333333';
+  ctx.fillRect(20, 90, healthBarWidth, healthBarHeight);
+  if (healthDrop) ctx.fillStyle = '#ff3333';
+  else {
+    const pct = Math.max(0, Math.min(1, healthPercentage));
+    ctx.fillStyle = pct > 0.5 ? '#00ff66' : '#ffcc00';
+  }
+  ctx.fillRect(20, 90, healthBarWidth * Math.max(0, Math.min(1, healthPercentage)), healthBarHeight);
+  ctx.restore();
+
+  // Healing overlay and final bar
+  const isHealing = gameState.healEffect > 0;
+  const healGlowIntensity = isHealing ? (gameState.healEffect / 120) : 0;
+  ctx.fillStyle = '#333333';
+  ctx.fillRect(20, 90, healthBarWidth, healthBarHeight);
+  if (isHealing) {
+    ctx.shadowColor = '#00ff00';
+    ctx.shadowBlur = 20 * healGlowIntensity;
+    ctx.fillStyle = `rgba(0, 255, 0, ${0.3 * healGlowIntensity})`;
+    ctx.fillRect(15, 85, healthBarWidth + 10, healthBarHeight + 10);
+    ctx.shadowBlur = 0;
+  }
+  let healthColor = healthPercentage > 0.5 ? '#00ff00' : healthPercentage > 0.25 ? '#ffff00' : '#ff0000';
+  if (isHealing) healthColor = `rgba(0, 255, 0, ${0.8 + 0.2 * healGlowIntensity})`;
+  ctx.fillStyle = healthColor;
+  ctx.fillRect(20, 90, healthBarWidth * healthPercentage, healthBarHeight);
+  ctx.strokeStyle = '#ffffff';
+
+  // Fuel meter (bottom-left) with toast and beeps
+  {
+    const fuel = gameState.player.fuel ?? 0;
+    const maxFuel = gameState.player.maxFuel ?? 100;
+    const low = gameState.player.fuelLowThreshold ?? Math.floor(maxFuel * 0.25);
+    const crit = gameState.player.fuelCriticalThreshold ?? Math.floor(maxFuel * 0.1);
+    const pct = Math.max(0, Math.min(1, fuel / maxFuel));
+    const x = 20, y = CANVAS_HEIGHT - 40, w = 200, h = 14;
+    const isCrit = fuel <= crit;
+    const isLow = fuel <= low;
+    const flash = isCrit ? (0.5 + 0.5 * Math.sin(now * 0.02)) : (isLow ? (0.7 + 0.3 * Math.sin(now * 0.015)) : 1.0);
+    ctx.save();
+    ctx.globalAlpha = 0.8;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = '#222';
+    ctx.fillRect(x, y, w, h);
+    const color = isCrit ? `rgba(255,50,50,${flash})` : isLow ? `rgba(255,190,60,${flash})` : 'rgba(80,255,120,0.95)';
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 1.0;
+    ctx.fillRect(x, y, w * pct, h);
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 12px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText('FUEL', x, y - 6);
+    ctx.restore();
+
+    let level: 'normal' | 'low' | 'critical' = 'normal';
+    if (fuel <= crit) level = 'critical'; else if (fuel <= low) level = 'low';
+    if (level !== r.lastFuelWarnLevelRef.current) {
+      const cooldownMs = 1500;
+      if (now - r.lastFuelBeepTsRef.current > cooldownMs) {
+        try {
+          const ss = r.soundSystem as { playLowFuelBeep?: (lvl: 'critical' | 'low') => void; playUiBeep?: () => void };
+          if (level === 'critical' && typeof ss?.playLowFuelBeep === 'function') ss.playLowFuelBeep('critical');
+          else if (level === 'low' && typeof ss?.playLowFuelBeep === 'function') ss.playLowFuelBeep('low');
+          else if (typeof ss?.playUiBeep === 'function') ss.playUiBeep();
+        } catch {}
+        r.lastFuelBeepTsRef.current = now;
+      }
+      r.lastFuelWarnLevelRef.current = level;
+    }
+
+    if (fuel >= maxFuel && r.prevFuelRef.current < maxFuel) {
+      r.refuelToastUntilRef.current = now + 1200;
+    }
+    r.prevFuelRef.current = fuel;
+    if (r.refuelToastUntilRef.current > now) {
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = '#c8ffe6';
+      ctx.font = 'bold 14px Arial';
+      ctx.fillText('REFUELED!', x + w + 16, y + 10);
+      ctx.restore();
+    }
+  }
+
+  // Black frame border and off-screen indicators
+  {
+    const border = 2;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = border;
+    ctx.strokeRect(border * 0.5, border * 0.5, CANVAS_WIDTH - border, CANVAS_HEIGHT - border);
+    ctx.restore();
+
+    const drawIndicator = (
+      target: { tileX: number; tileY: number; position: { x: number; y: number } },
+      kind: 'fuel' | 'reward'
+    ) => {
+      const px = gameState.player.position.x;
+      const py = gameState.player.position.y;
+      const curTX = gameState.worldTileX ?? 0;
+      const curTY = gameState.worldTileY ?? 0;
+      const dTX = target.tileX - curTX;
+      const dTY = target.tileY - curTY;
+      const tileDist = Math.max(Math.abs(dTX), Math.abs(dTY));
+      const wraps = Math.max(1, Math.min(9, tileDist));
+      const ang = (tileDist > 0)
+        ? Math.atan2(dTY, dTX)
+        : Math.atan2(target.position.y - py, target.position.x - px);
+
+      const margin = border * 0.5 + 6;
+      const xMin = margin, xMax = CANVAS_WIDTH - margin;
+      const yMin = margin, yMax = CANVAS_HEIGHT - margin;
+      const vx = Math.cos(ang), vy = Math.sin(ang);
+      let t = Infinity;
+      let ax = CANVAS_WIDTH / 2, ay = CANVAS_HEIGHT / 2;
+      if (Math.abs(vx) > 1e-5) {
+        const t1 = (xMin - ax) / vx; const y1 = ay + t1 * vy; if (t1 > 0 && y1 >= yMin && y1 <= yMax && t1 < t) t = t1;
+        const t2 = (xMax - ax) / vx; const y2 = ay + t2 * vy; if (t2 > 0 && y2 >= yMin && y2 <= yMax && t2 < t) t = t2;
+      }
+      if (Math.abs(vy) > 1e-5) {
+        const t3 = (yMin - ay) / vy; const x3 = ax + t3 * vx; if (t3 > 0 && x3 >= xMin && x3 <= xMax && t3 < t) t = t3;
+        const t4 = (yMax - ay) / vy; const x4 = ax + t4 * vx; if (t4 > 0 && x4 >= xMin && x4 <= xMax && t4 < t) t = t4;
+      }
+      if (!isFinite(t) || t === Infinity) return;
+      ax = ax + vx * t; ay = ay + vy * t;
+
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.save();
+      ctx.rotate(ang);
+      if (kind === 'fuel') {
+        ctx.globalAlpha = 0.95; ctx.strokeStyle = '#88ffcc'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = '#66d9aa'; ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.stroke(); ctx.fillStyle = '#3a6355'; ctx.fillRect(-1.5, -12, 3, 6);
+      } else {
+        ctx.globalAlpha = 0.95; ctx.strokeStyle = '#cfe3ff'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(-7, 3); ctx.lineTo(0, -6); ctx.lineTo(7, 3); ctx.lineTo(5, 3); ctx.lineTo(0, -1); ctx.lineTo(-5, 3); ctx.closePath(); ctx.stroke();
+      }
+      ctx.restore();
+      ctx.save();
+      ctx.rotate(ang);
+      ctx.fillStyle = '#ffffff'; ctx.globalAlpha = 0.95; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-12, -7); ctx.lineTo(-12, 7); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      ctx.save();
+      ctx.fillStyle = '#ffffff'; ctx.font = 'bold 12px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const offX = -18 * Math.cos(ang); const offY = -18 * Math.sin(ang);
+      ctx.fillText(String(wraps), ax + offX, ay + offY);
+      ctx.restore();
+      ctx.restore();
+    };
+
+    if (gameState.refuelStation && gameState.refuelStation.position) drawIndicator(gameState.refuelStation, 'fuel');
+    if (gameState.rewardShip && gameState.rewardShip.position) drawIndicator(gameState.rewardShip, 'reward');
+
+    if (r.showDebugHud) {
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(8, CANVAS_HEIGHT - 88, 260, 80);
+      ctx.fillStyle = '#88ffcc';
+      ctx.font = '12px monospace';
+      const tx = gameState.worldTileX ?? 0;
+      const ty = gameState.worldTileY ?? 0;
+      const st = gameState.refuelStation;
+      const dtx = st ? st.tileX - tx : 0;
+      const dty = st ? st.tileY - ty : 0;
+      const vel = gameState.player.velocity;
+      const keys = Object.keys(gameState.keys).filter(k => gameState.keys[k]).join('');
+      ctx.fillText(`Tile: (${tx}, ${ty})`, 14, CANVAS_HEIGHT - 68);
+      ctx.fillText(`To Station: dT=(${dtx}, ${dty})`, 14, CANVAS_HEIGHT - 52);
+      ctx.fillText(`Vel: (${vel.x.toFixed(2)}, ${vel.y.toFixed(2)})`, 14, CANVAS_HEIGHT - 36);
+      ctx.fillText(`Keys: ${keys}`, 14, CANVAS_HEIGHT - 20);
+      ctx.restore();
+    }
+  }
+}
+
 // Adapters for entity rendering (Pass A shim): delegate to Game.tsx local fns via env.refs
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function drawPlayer(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
@@ -189,6 +507,7 @@ export function drawPlayer(
   ctx.restore();
 }
 
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function drawAsteroids(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
@@ -400,6 +719,7 @@ export function drawAsteroids(
   });
 }
 
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function drawAliens(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
@@ -479,6 +799,7 @@ export function drawAliens(
   });
 }
 
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function drawBullets(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
@@ -492,6 +813,7 @@ export function drawBullets(
   });
 }
 
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function drawBonuses(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
@@ -585,6 +907,7 @@ export function drawBonuses(
   });
 }
 // Visual-only debris rendering (moved from Game.tsx)
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function drawDebris(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
@@ -622,6 +945,7 @@ export function drawDebris(
 }
 
 // Explosion particles rendering (moved from Game.tsx)
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function drawExplosions(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
@@ -650,6 +974,7 @@ export function drawExplosions(
 }
 
 // Starfield update/draw extracted from Game.tsx. Requires refs provided in env.refs.
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function drawStars(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
@@ -856,6 +1181,7 @@ export function drawStars(
 // Background rendering extracted from Game.tsx. This function relies on refs passed via env.refs
 // to avoid circular imports and preserve behavior. It intentionally uses performance.now() in
 // the same places the original code did (no additional resampling beyond original behavior).
+/** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
 export function drawBackground(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,

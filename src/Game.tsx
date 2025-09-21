@@ -59,6 +59,8 @@ import {
   drawAliens as drawAliensMod,
   drawBullets as drawBulletsMod,
   drawBonuses as drawBonusesMod,
+  drawTractorOverlay,
+  drawHUD,
 } from './gameLoop/draw';
 
 // ===== Lightweight Dev Logger (env-guarded) =====
@@ -5339,8 +5341,9 @@ ctx.strokeStyle = '#ffffff';
       }
       prevAlienCountRef.current = alienCount;
 
-      // UI (no target rings)
-      drawUI(ctx, gameState);
+      // UI layers: overlays then HUD (order preserved)
+      drawTractorOverlay(ctx, gameState, env);
+      drawHUD(ctx, gameState, env);
 
       // Show current background name on screen (bottom-left)
       try {
