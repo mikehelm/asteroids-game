@@ -3096,7 +3096,6 @@ ctx.strokeStyle = '#ffffff';
         warpParticlesRef,
         // Entity draw locals for Pass A shim (player now implemented in module)
         drawAsteroidsLocal: drawAsteroids,
-        drawBulletsLocal: drawBullets,
         drawBonusesLocal: drawBonuses,
         fadeInActiveRef,
         fadeInStartRef,
@@ -5270,227 +5269,245 @@ ctx.strokeStyle = '#ffffff';
       }
     }
 
-    // Render: draw background space image (behind stars and game)
-    // Mapping info for sampling background brightness under stars
-    const bgMap = drawBackground(ctx, gameState, env);
+    const __runFrameBody = () => {
+      // Render: draw background space image (behind stars and game)
+      // Mapping info for sampling background brightness under stars
+      const bgMap = drawBackground(ctx, gameState, env);
 
-    // Stars (update/draw) immediately after background
-    drawStars(ctx, gameState, env, bgMap);
+      // Stars (update/draw) immediately after background
+      drawStars(ctx, gameState, env, bgMap);
 
-    if (gameState.gameRunning && !isPausedRef.current) {
-      // During tractor beam attach/displaying/pushing, render the player on top of the asteroid
-      const tState = tractionBeamRef.current;
-      const showShipOnTop = tState.active && (tState.phase === 'attached' || tState.phase === 'displaying' || tState.phase === 'pushing');
-      if (showShipOnTop) {
-        // Draw asteroids first, then overlay player to ensure visibility
-        drawAsteroidsMod(ctx, gameState, env);
-        drawPlayerMod(ctx, gameState, env);
-      } else {
-        // Default order
-        drawPlayerMod(ctx, gameState, env);
-        drawAsteroidsMod(ctx, gameState, env);
-      }
-      drawBulletsMod(ctx, gameState, env);
-      drawAliensMod(ctx, gameState, env);
-      drawBonusesMod(ctx, gameState, env);
-    }
-    drawAlienBullets(ctx, gameState.alienBullets);
-    if (gameState.playerMissiles && gameState.playerMissiles.length > 0) {
-      drawAlienBullets(ctx, gameState.playerMissiles);
-    }
-    drawExplosionsMod(ctx, gameState, env);
-    // Visual-only debris
-    updateVisualDebris();
-    drawDebrisMod(ctx, gameState, env);
-    // Draw refuel station (and handle docking/refill)
-    drawRefuelStation(ctx, gameState);
-    // Draw reward ship (and handle docking reward)
-    drawRewardShip(ctx, gameState);
-
-    // Detect HUD-relevant changes and set highlight timers
-    const nowHud = performance.now();
-    // Health change
-    if (gameState.player.health > prevHealthRef.current) {
-      healthBrightUntilRef.current = nowHud + 1200; // brighten on heal
-    } else if (gameState.player.health < prevHealthRef.current) {
-      healthDropUntilRef.current = nowHud + 1000; // flash red on damage
-    }
-    prevHealthRef.current = gameState.player.health;
-    // Lives change (brighten on life gain)
-    if (gameState.lives > prevLivesRef.current) {
-      livesBrightUntilRef.current = nowHud + 1200;
-    }
-    prevLivesRef.current = gameState.lives;
-    // Score drop -> red flash
-    if (gameState.score < prevScoreRef.current) {
-      scoreDropUntilRef.current = nowHud + 1000;
-    }
-    prevScoreRef.current = gameState.score;
-
-    // Stage change -> UI event (level up)
-    if (gameState.stage !== prevStageRef.current) {
-      emitUiEvent({ type: 'level-up', stage: gameState.stage });
-      prevStageRef.current = gameState.stage;
-    }
-    // Alien kill heuristic: if alien count decreased since last frame
-    const alienCount = gameState.alienShips.length;
-    if (alienCount < prevAlienCountRef.current) {
-      emitUiEvent({ type: 'alien-kill' });
-    }
-    prevAlienCountRef.current = alienCount;
-
-    // UI (no target rings)
-    drawUI(ctx, gameState);
-
-    // Show current background name on screen (bottom-left)
-    try {
-      if (backdrops.length > 0) {
-        const url = backdrops[backdropIndex] || '';
-        const parts = url.split('/');
-        const fname = parts[parts.length - 1] || url;
-        ctx.save();
-        ctx.globalAlpha = 0.85;
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '12px Arial';
-        ctx.textAlign = 'left';
-        ctx.fillText(`Background: ${fname}`, 12, CANVAS_HEIGHT - 12);
-        ctx.restore();
-      }
-    } catch { /* ignore */ }
-
-    // Draw song title overlays (bottom-left third) with perspective fade/scale
-    const now = performance.now();
-    if (titleOverlaysRef.current.length > 0) {
-      const kept: typeof titleOverlaysRef.current = [];
-      for (const o of titleOverlaysRef.current) {
-        const t = now - o.start; // ms since overlay start
-        const lifetime = 5200; // total ms window per overlay
-        if (t > lifetime) continue; // drop after full window
-        kept.push(o);
-
-        // Overlay already starts after the 2s play delay; add a 3s pause before movement/fade
-        const tPause = 3000;
-        const tVisible = Math.max(0, t);
-        const tMove = Math.max(0, tVisible - tPause);
-        const lifetimeVisible = Math.max(200, lifetime - 0);
-
-        // Typing parameters (start after 2s)
-        const perCharMs = 45; // typing speed
-        const chars = Math.max(0, Math.min(o.text.length, Math.floor(tVisible / perCharMs)));
-        const visible = o.text.slice(0, chars);
-        if (!visible) continue;
-
-        // Easing helpers
-        const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
-        const easeIn = (x: number) => x * x;
-        const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3);
-
-        // Overall normalized progress
-        const pMove = clamp01(tMove / (lifetimeVisible - tPause));
-        // Fade-in first 15%, fade-out last 25%
-        const fadeIn = easeIn(clamp01(tVisible / (lifetimeVisible * 0.15)));
-        const fadeOut = 1 - clamp01((tMove - (lifetimeVisible * 0.50)) / (lifetimeVisible * 0.25));
-
-        // Start bottom-center, travel subtly upward and slightly to the right
-        const baseX = Math.floor(CANVAS_WIDTH * 0.5);
-        const baseY = CANVAS_HEIGHT - 40;
-        const vanishX = baseX + Math.floor(CANVAS_WIDTH * 0.05);
-        // Halve the vertical rise compared to before
-        const vanishY = baseY - Math.floor(CANVAS_HEIGHT * 0.12);
-        // Two times slower movement via eased progress on a longer denominator
-        const travel = easeOutCubic(pMove * 0.5);
-        const posX = baseX + (vanishX - baseX) * travel;
-        const posY = baseY + (vanishY - baseY) * travel;
-
-        // Scale down as it travels into the distance
-        const scale = 1 - 0.55 * travel;
-        // Alpha tied to scale so fade matches distance, with fade in/out envelope
-        // Strengthen the end transparency by squaring fadeOut
-        const alpha = Math.max(0, Math.min(1, scale * fadeIn * (fadeOut * fadeOut)));
-
-        // Angle to match the direction towards the vanishing point
-        const angle = Math.atan2(vanishY - baseY, vanishX - baseX);
-
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.translate(posX, posY);
-        ctx.rotate(angle * 0.08); // subtle tilt along the travel direction
-        ctx.scale(scale, scale);
-        // Subtle glow and outline for readability that diminishes with distance
-        ctx.shadowColor = 'rgba(255,255,255,0.6)';
-        ctx.shadowBlur = 12 * (1 - travel);
-        ctx.fillStyle = '#ffffff';
-        ctx.strokeStyle = 'rgba(0,0,0,0.55)';
-        ctx.lineWidth = 3 * (1 - 0.5 * travel);
-        // Double the title size
-        ctx.font = '48px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'alphabetic';
-        ctx.strokeText(visible, 0, 0);
-        ctx.fillText(visible, 0, 0);
-
-        // Draw "Now Playing" above, with a faster fade so it disappears sooner (guarded by flag)
-        if (ENABLE_CANVAS_NOW_PLAYING_OVERLAY) {
-          const nowLabelAlpha = Math.max(0, Math.min(1, scale * fadeIn * Math.pow(fadeOut, 3))) * 0.9;
-          if (nowLabelAlpha > 0.01) {
-            ctx.save();
-            ctx.globalAlpha = nowLabelAlpha;
-            ctx.translate(0, -22 * (1 - 0.5 * travel));
-            ctx.fillStyle = '#a3f7ff';
-            ctx.strokeStyle = '#00161a';
-            // Increase subtitle size to match larger title
-            ctx.font = '28px Arial';
-            ctx.lineWidth = 2 * (1 - 0.5 * travel);
-            ctx.strokeText('Now Playing', 0, 0);
-            ctx.fillText('Now Playing', 0, 0);
-            ctx.restore();
-          }
+      if (gameState.gameRunning && !isPausedRef.current) {
+        // During tractor beam attach/displaying/pushing, render the player on top of the asteroid
+        const tState = tractionBeamRef.current;
+        const showShipOnTop = tState.active && (tState.phase === 'attached' || tState.phase === 'displaying' || tState.phase === 'pushing');
+        if (showShipOnTop) {
+          // Draw asteroids first, then overlay player to ensure visibility
+          drawAsteroidsMod(ctx, gameState, env);
+          drawPlayerMod(ctx, gameState, env);
+        } else {
+          // Default order
+          drawPlayerMod(ctx, gameState, env);
+          drawAsteroidsMod(ctx, gameState, env);
         }
-        ctx.restore();
+        drawBulletsMod(ctx, gameState, env);
+        drawAliensMod(ctx, gameState, env);
+        drawBonusesMod(ctx, gameState, env);
       }
-      titleOverlaysRef.current = kept;
-    }
-
-    // Handle level-end audio ducking restore over 2s (smooth)
-    if (duckPhaseRef.current === 'boost') {
-      const held = performance.now() - duckT0Ref.current;
-      if (held >= DUCK_HOLD_MS) {
-        duckPhaseRef.current = 'restore';
-        duckRestoreT0Ref.current = performance.now();
+      drawAlienBullets(ctx, gameState.alienBullets);
+      if (gameState.playerMissiles && gameState.playerMissiles.length > 0) {
+        drawAlienBullets(ctx, gameState.playerMissiles);
       }
-    } else if (duckPhaseRef.current === 'restore') {
-      const t = Math.max(0, Math.min(1, (performance.now() - duckRestoreT0Ref.current) / RESTORE_MS));
-      // Linear interpolation back to original
-      const music = 0.08 + (musicVolOrigRef.current - 0.08) * t;
-      const sfx = 0.7 + (sfxVolOrigRef.current - 0.7) * t;
-      soundSystem.setMusicVolume(music);
-      soundSystem.setSfxVolume(sfx);
-      if (t >= 1) {
-        duckPhaseRef.current = 'none';
+      drawExplosionsMod(ctx, gameState, env);
+      // Visual-only debris
+      updateVisualDebris();
+      drawDebrisMod(ctx, gameState, env);
+      // Draw refuel station (and handle docking/refill)
+      drawRefuelStation(ctx, gameState);
+      // Draw reward ship (and handle docking reward)
+      drawRewardShip(ctx, gameState);
+
+      // Detect HUD-relevant changes and set highlight timers
+      const nowHud = performance.now();
+      // Health change
+      if (gameState.player.health > prevHealthRef.current) {
+        healthBrightUntilRef.current = nowHud + 1200; // brighten on heal
+      } else if (gameState.player.health < prevHealthRef.current) {
+        healthDropUntilRef.current = nowHud + 1000; // flash red on damage
       }
-    }
+      prevHealthRef.current = gameState.player.health;
+      // Lives change (brighten on life gain)
+      if (gameState.lives > prevLivesRef.current) {
+        livesBrightUntilRef.current = nowHud + 1200;
+      }
+      prevLivesRef.current = gameState.lives;
+      // Score drop -> red flash
+      if (gameState.score < prevScoreRef.current) {
+        scoreDropUntilRef.current = nowHud + 1000;
+      }
+      prevScoreRef.current = gameState.score;
 
-    // Handle restart
-    if (!gameState.gameRunning && gameState.keys['r']) {
-      initGame();
-    }
+      // Stage change -> UI event (level up)
+      if (gameState.stage !== prevStageRef.current) {
+        emitUiEvent({ type: 'level-up', stage: gameState.stage });
+        prevStageRef.current = gameState.stage;
+      }
+      // Alien kill heuristic: if alien count decreased since last frame
+      const alienCount = gameState.alienShips.length;
+      if (alienCount < prevAlienCountRef.current) {
+        emitUiEvent({ type: 'alien-kill' });
+      }
+      prevAlienCountRef.current = alienCount;
 
-    // Dev: add a lightweight summary roughly every 30 seconds (60fps * 30s = DEV_SUMMARY_FRAMES)
+      // UI (no target rings)
+      drawUI(ctx, gameState);
+
+      // Show current background name on screen (bottom-left)
+      try {
+        if (backdrops.length > 0) {
+          const url = backdrops[backdropIndex] || '';
+          const parts = url.split('/');
+          const fname = parts[parts.length - 1] || url;
+          ctx.save();
+          ctx.globalAlpha = 0.85;
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '12px Arial';
+          ctx.textAlign = 'left';
+          ctx.fillText(`Background: ${fname}`, 12, CANVAS_HEIGHT - 12);
+          ctx.restore();
+        }
+      } catch { /* ignore */ }
+
+      // Draw song title overlays (bottom-left third) with perspective fade/scale
+      const now = performance.now();
+      if (titleOverlaysRef.current.length > 0) {
+        const kept: typeof titleOverlaysRef.current = [];
+        for (const o of titleOverlaysRef.current) {
+          const t = now - o.start; // ms since overlay start
+          const lifetime = 5200; // total ms window per overlay
+          if (t > lifetime) continue; // drop after full window
+          kept.push(o);
+
+          // Overlay already starts after the 2s play delay; add a 3s pause before movement/fade
+          const tPause = 3000;
+          const tVisible = Math.max(0, t);
+          const tMove = Math.max(0, tVisible - tPause);
+          const lifetimeVisible = Math.max(200, lifetime - 0);
+
+          // Typing parameters (start after 2s)
+          const perCharMs = 45; // typing speed
+          const chars = Math.max(0, Math.min(o.text.length, Math.floor(tVisible / perCharMs)));
+          const visible = o.text.slice(0, chars);
+          if (!visible) continue;
+
+          // Easing helpers
+          const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+          const easeIn = (x: number) => x * x;
+          const easeOutCubic = (x: number) => 1 - Math.pow(1 - x, 3);
+
+          // Overall normalized progress
+          const pMove = clamp01(tMove / (lifetimeVisible - tPause));
+          // Fade-in first 15%, fade-out last 25%
+          const fadeIn = easeIn(clamp01(tVisible / (lifetimeVisible * 0.15)));
+          const fadeOut = 1 - clamp01((tMove - (lifetimeVisible * 0.50)) / (lifetimeVisible * 0.25));
+
+          // Start bottom-center, travel subtly upward and slightly to the right
+          const baseX = Math.floor(CANVAS_WIDTH * 0.5);
+          const baseY = CANVAS_HEIGHT - 40;
+          const vanishX = baseX + Math.floor(CANVAS_WIDTH * 0.05);
+          // Halve the vertical rise compared to before
+          const vanishY = baseY - Math.floor(CANVAS_HEIGHT * 0.12);
+          // Two times slower movement via eased progress on a longer denominator
+          const travel = easeOutCubic(pMove * 0.5);
+          const posX = baseX + (vanishX - baseX) * travel;
+          const posY = baseY + (vanishY - baseY) * travel;
+
+          // Scale down as it travels into the distance
+          const scale = 1 - 0.55 * travel;
+          // Alpha tied to scale so fade matches distance, with fade in/out envelope
+          // Strengthen the end transparency by squaring fadeOut
+          const alpha = Math.max(0, Math.min(1, scale * fadeIn * (fadeOut * fadeOut)));
+
+          // Angle to match the direction towards the vanishing point
+          const angle = Math.atan2(vanishY - baseY, vanishX - baseX);
+
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.translate(posX, posY);
+          ctx.rotate(angle * 0.08); // subtle tilt along the travel direction
+          ctx.scale(scale, scale);
+          // Subtle glow and outline for readability that diminishes with distance
+          ctx.shadowColor = 'rgba(255,255,255,0.6)';
+          ctx.shadowBlur = 12 * (1 - travel);
+          ctx.fillStyle = '#ffffff';
+          ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+          ctx.lineWidth = 3 * (1 - 0.5 * travel);
+          // Double the title size
+          ctx.font = '48px Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'alphabetic';
+          ctx.strokeText(visible, 0, 0);
+          ctx.fillText(visible, 0, 0);
+
+          // Draw "Now Playing" above, with a faster fade so it disappears sooner (guarded by flag)
+          if (ENABLE_CANVAS_NOW_PLAYING_OVERLAY) {
+            const nowLabelAlpha = Math.max(0, Math.min(1, scale * fadeIn * Math.pow(fadeOut, 3))) * 0.9;
+            if (nowLabelAlpha > 0.01) {
+              ctx.save();
+              ctx.globalAlpha = nowLabelAlpha;
+              ctx.translate(0, -22 * (1 - 0.5 * travel));
+              ctx.fillStyle = '#a3f7ff';
+              ctx.strokeStyle = '#00161a';
+              // Increase subtitle size to match larger title
+              ctx.font = '28px Arial';
+              ctx.lineWidth = 2 * (1 - 0.5 * travel);
+              ctx.strokeText('Now Playing', 0, 0);
+              ctx.fillText('Now Playing', 0, 0);
+              ctx.restore();
+            }
+          }
+          ctx.restore();
+        }
+        titleOverlaysRef.current = kept;
+      }
+
+      // Handle level-end audio ducking restore over 2s (smooth)
+      if (duckPhaseRef.current === 'boost') {
+        const held = performance.now() - duckT0Ref.current;
+        if (held >= DUCK_HOLD_MS) {
+          duckPhaseRef.current = 'restore';
+          duckRestoreT0Ref.current = performance.now();
+        }
+      } else if (duckPhaseRef.current === 'restore') {
+        const t = Math.max(0, Math.min(1, (performance.now() - duckRestoreT0Ref.current) / RESTORE_MS));
+        // Linear interpolation back to original
+        const music = 0.08 + (musicVolOrigRef.current - 0.08) * t;
+        const sfx = 0.7 + (sfxVolOrigRef.current - 0.7) * t;
+        soundSystem.setMusicVolume(music);
+        soundSystem.setSfxVolume(sfx);
+        if (t >= 1) {
+          duckPhaseRef.current = 'none';
+        }
+      }
+
+      // Handle restart
+      if (!gameState.gameRunning && gameState.keys['r']) {
+        initGame();
+      }
+
+      // Dev: add a lightweight summary roughly every 30 seconds (60fps * 30s = DEV_SUMMARY_FRAMES)
+      if (__DEV_MODE__) {
+        __frameCounter++;
+        if (__frameCounter % DEV_SUMMARY_FRAMES === 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const gs = gameStateRef.current as any;
+          const tractorPhase = gs?.tractorBeam?.phase ?? 'idle';
+          const summary = `f=${__frameCounter} ast=${gs?.asteroids?.length ?? 0} bul=${gs?.bullets?.length ?? 0} deb=${gs?.visualDebris?.length ?? 0} exp=${gs?.explosions?.length ?? 0} phase=${tractorPhase} bg=${gs?.bgBrightness ?? DEFAULT_BG_BRIGHTNESS}`;
+          // eslint-disable-next-line no-console
+          console.log('[summary]', summary);
+          const arr = debugLinesRef.current; arr.push(summary); if (arr.length > DEBUG_PANEL_MAX) arr.splice(0, arr.length - DEBUG_PANEL_MAX);
+        }
+      }
+
+      // Forward draw stub (no-op in Pass A); placed near end of frame
+      drawFrame(ctx, gameState, frameNow, env);
+    };
+
     if (__DEV_MODE__) {
-      __frameCounter++;
-      if (__frameCounter % DEV_SUMMARY_FRAMES === 0) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const gs = gameStateRef.current as any;
-        const tractorPhase = gs?.tractorBeam?.phase ?? 'idle';
-        const summary = `f=${__frameCounter} ast=${gs?.asteroids?.length ?? 0} bul=${gs?.bullets?.length ?? 0} deb=${gs?.visualDebris?.length ?? 0} exp=${gs?.explosions?.length ?? 0} phase=${tractorPhase} bg=${gs?.bgBrightness ?? DEFAULT_BG_BRIGHTNESS}`;
+      try {
+        __runFrameBody();
+      } catch (err) {
+        const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+        const arr = debugLinesRef.current; arr.push(`[error] ${msg}`);
+        if (arr.length > 200) arr.splice(0, arr.length - 200);
         // eslint-disable-next-line no-console
-        console.log('[summary]', summary);
-        const arr = debugLinesRef.current; arr.push(summary); if (arr.length > DEBUG_PANEL_MAX) arr.splice(0, arr.length - DEBUG_PANEL_MAX);
+        console.error('[frame-error]', err);
+        // Re-throw to avoid masking in dev if needed:
+        // throw err;
       }
+    } else {
+      __runFrameBody();
     }
-
-    // Forward draw stub (no-op in Pass A); placed near end of frame
-    drawFrame(ctx, gameState, frameNow, env);
 
     animationFrameRef.current = requestAnimationFrame(gameLoop);
     // Note: we intentionally rely on stable refs (e.g., isPausedRef, isMutedRef, musicUserPausedRef)

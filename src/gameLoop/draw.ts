@@ -482,21 +482,107 @@ export function drawAliens(
 export function drawBullets(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
-  env: EnvLike
+  _env: EnvLike
 ): void {
-  const r = env.refs as any;
-  const fnPlayer = r.drawBulletsLocal as (ctx: CanvasRenderingContext2D, bs: any[]) => void;
-  if (typeof fnPlayer === 'function') fnPlayer(ctx, gameState.bullets);
+  ctx.fillStyle = '#ffff00';
+  gameState.bullets.forEach(bullet => {
+    ctx.beginPath();
+    ctx.arc(bullet.position.x, bullet.position.y, bullet.radius, 0, 2 * Math.PI);
+    ctx.fill();
+  });
 }
 
 export function drawBonuses(
   ctx: CanvasRenderingContext2D,
   gameState: GameState,
-  env: EnvLike
+  _env: EnvLike
 ): void {
-  const r = env.refs as any;
-  const fn = r.drawBonusesLocal as (ctx: CanvasRenderingContext2D, bs: any[]) => void;
-  if (typeof fn === 'function') fn(ctx, gameState.bonuses);
+  const bonuses = gameState.bonuses;
+  bonuses.forEach(bonus => {
+    ctx.save();
+    ctx.translate(bonus.position.x, bonus.position.y);
+
+    if (bonus.type === 'shield') {
+      // Draw shield bonus - blue glowing hexagon with shield symbol
+      const time = Date.now() * 0.003;
+      const glowIntensity = 0.7 + Math.sin(time) * 0.3;
+
+      // Outer glow
+      ctx.fillStyle = `rgba(0, 150, 255, ${glowIntensity * 0.3})`;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * 2 * Math.PI;
+        const x = Math.cos(angle) * 30;
+        const y = Math.sin(angle) * 30;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+
+      // Core hexagon
+      ctx.fillStyle = 'rgba(0, 120, 255, 0.9)';
+      ctx.strokeStyle = 'rgba(200, 230, 255, 0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * 2 * Math.PI;
+        const x = Math.cos(angle) * 20;
+        const y = Math.sin(angle) * 20;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Shield emblem
+      ctx.fillStyle = '#e6f7ff';
+      ctx.beginPath();
+      ctx.moveTo(0, -8);
+      ctx.lineTo(8, -2);
+      ctx.lineTo(6, 8);
+      ctx.lineTo(-6, 8);
+      ctx.lineTo(-8, -2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // muzzle flashes
+      ctx.fillStyle = '#ffff66';
+      ctx.beginPath(); ctx.arc(10, 0, 3, 0, 2 * Math.PI); ctx.fill();
+      ctx.beginPath(); ctx.arc(-10, 0, 3, 0, 2 * Math.PI); ctx.fill();
+    } else if (bonus.type === 'missile') {
+      // Missile bonus: larger white missile icon with glow
+      const time = Date.now() * 0.004;
+      const pulse = 0.6 + 0.4 * Math.sin(time);
+      ctx.shadowColor = '#ffffff';
+      ctx.shadowBlur = 16 * pulse;
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+      ctx.lineWidth = 2;
+      // Draw a simple missile body
+      ctx.save();
+      ctx.rotate((Math.PI / 8) * Math.sin(time * 0.4));
+      // nose
+      ctx.beginPath();
+      ctx.moveTo(18, 0);
+      ctx.lineTo(-10, -6);
+      ctx.lineTo(-10, 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // fins
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
+      ctx.beginPath(); ctx.moveTo(-6, -8); ctx.lineTo(-12, -2); ctx.lineTo(-4, -2); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-6, 8); ctx.lineTo(-12, 2); ctx.lineTo(-4, 2); ctx.closePath(); ctx.fill();
+      // small trail puff
+      ctx.fillStyle = 'rgba(255,255,255,0.4)';
+      ctx.beginPath(); ctx.arc(-14, 0, 4 + 2 * pulse, 0, 2 * Math.PI); ctx.fill();
+      ctx.restore();
+    } else {
+      // unknown: no-op
+    }
+
+    ctx.restore();
+  });
 }
 // Visual-only debris rendering (moved from Game.tsx)
 export function drawDebris(
