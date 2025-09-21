@@ -91,7 +91,7 @@ export function drawHUD(
   // Score
   ctx.save();
   ctx.globalAlpha = baseAlpha;
-  ctx.fillStyle = (now < r.scoreDropUntilRef.current) ? '#ff5555' : '#ffffff';
+  ctx.fillStyle = (now < (r.scoreDropUntilRef?.current ?? -Infinity)) ? '#ff5555' : '#ffffff';
   ctx.fillText(`Score: ${gameState.score}`, 20, 40);
   ctx.restore();
 
@@ -136,7 +136,7 @@ export function drawHUD(
   const livesText = `Lives: ${gameState.lives}`;
   const metrics = ctx.measureText(livesText);
   ctx.save();
-  ctx.globalAlpha = (now < r.livesBrightUntilRef.current) ? 1.0 : baseAlpha;
+  ctx.globalAlpha = (now < (r.livesBrightUntilRef?.current ?? -Infinity)) ? 1.0 : baseAlpha;
   ctx.fillStyle = '#ffffff';
   ctx.fillText(livesText, CANVAS_WIDTH - metrics.width - 20, 40);
   ctx.restore();
@@ -145,8 +145,8 @@ export function drawHUD(
   const healthBarWidth = 200;
   const healthBarHeight = 20;
   const healthPercentage = gameState.player.health / gameState.player.maxHealth;
-  const healthBright = now < r.healthBrightUntilRef.current;
-  const healthDrop = now < r.healthDropUntilRef.current;
+  const healthBright = now < (r.healthBrightUntilRef?.current ?? -Infinity);
+  const healthDrop = now < (r.healthDropUntilRef?.current ?? -Infinity);
 
   ctx.save();
   ctx.globalAlpha = healthBright ? 1.0 : baseAlpha;
@@ -209,25 +209,25 @@ export function drawHUD(
 
     let level: 'normal' | 'low' | 'critical' = 'normal';
     if (fuel <= crit) level = 'critical'; else if (fuel <= low) level = 'low';
-    if (level !== r.lastFuelWarnLevelRef.current) {
+    if (level !== (r.lastFuelWarnLevelRef?.current)) {
       const cooldownMs = 1500;
-      if (now - r.lastFuelBeepTsRef.current > cooldownMs) {
+      if (now - (r.lastFuelBeepTsRef?.current ?? -Infinity) > cooldownMs) {
         try {
           const ss = r.soundSystem as { playLowFuelBeep?: (lvl: 'critical' | 'low') => void; playUiBeep?: () => void };
-          if (level === 'critical' && typeof ss?.playLowFuelBeep === 'function') ss.playLowFuelBeep('critical');
-          else if (level === 'low' && typeof ss?.playLowFuelBeep === 'function') ss.playLowFuelBeep('low');
-          else if (typeof ss?.playUiBeep === 'function') ss.playUiBeep();
+          if (r.soundSystem && level === 'critical' && typeof ss?.playLowFuelBeep === 'function') ss.playLowFuelBeep('critical');
+          else if (r.soundSystem && level === 'low' && typeof ss?.playLowFuelBeep === 'function') ss.playLowFuelBeep('low');
+          else if (r.soundSystem && typeof ss?.playUiBeep === 'function') ss.playUiBeep();
         } catch {}
-        r.lastFuelBeepTsRef.current = now;
+        if (r.lastFuelBeepTsRef) r.lastFuelBeepTsRef.current = now;
       }
-      r.lastFuelWarnLevelRef.current = level;
+      if (r.lastFuelWarnLevelRef) r.lastFuelWarnLevelRef.current = level;
     }
 
-    if (fuel >= maxFuel && r.prevFuelRef.current < maxFuel) {
-      r.refuelToastUntilRef.current = now + 1200;
+    if (fuel >= maxFuel && (r.prevFuelRef?.current ?? 0) < maxFuel) {
+      if (r.refuelToastUntilRef) r.refuelToastUntilRef.current = now + 1200;
     }
-    r.prevFuelRef.current = fuel;
-    if (r.refuelToastUntilRef.current > now) {
+    if (r.prevFuelRef) r.prevFuelRef.current = fuel;
+    if ((r.refuelToastUntilRef?.current ?? -Infinity) > now) {
       ctx.save();
       ctx.globalAlpha = 0.9;
       ctx.fillStyle = '#c8ffe6';
@@ -915,7 +915,9 @@ export function drawDebris(
 ): void {
   const arr = gameState.visualDebris;
   if (!arr || arr.length === 0) return;
-  for (const d of arr) {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const d = arr[i] as any;
+    if (!d || !d.position || !d.velocity) { arr.splice(i, 1); continue; }
     const t = d.life / d.maxLife;
     const alpha = Math.max(0, 1 - t); // fade out
     ctx.save();
