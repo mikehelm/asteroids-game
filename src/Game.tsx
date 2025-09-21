@@ -2988,9 +2988,6 @@ ctx.strokeStyle = '#ffffff';
         initialAreaRef,
         isPausedRef,
         warpParticlesRef,
-        // Entity draw locals for Pass A shim (player now implemented in module)
-        drawAsteroidsLocal: drawAsteroids,
-        drawBonusesLocal: drawBonuses,
         fadeInActiveRef,
         fadeInStartRef,
         distortionRef,

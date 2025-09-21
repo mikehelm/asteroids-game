@@ -2,7 +2,66 @@ import type { GameState, Asteroid } from '../types';
 import { renderTractorOverlay, renderFlipit } from '../tractorBeam';
 import { beamUi } from '../config/beamUi';
 import { createBlackPuffExplosion } from '../gameObjects';
-export type EnvLike = { refs: Record<string, unknown> };
+
+// Typed shape of the refs bag Game.tsx provides. We list the common refs used in this module
+// and include an index signature to remain forward-compatible without breaking type-checks.
+// Intentionally using 'any' for the index signature to avoid TS errors across many narrowly-typed refs.
+// This is a type-only aid; runtime behavior is unchanged.
+export type EnvRefs = {
+  // Background
+  bgImageRef?: { current: HTMLImageElement | null };
+  bgImageDataRef?: { current: ImageData | null };
+  bgRawCanvasRef?: { current: HTMLCanvasElement | null };
+  bgOffsetRef?: { current: { x: number; y: number } };
+  bgZoomExtraRef?: { current: number };
+  backdrops?: string[];
+  fadeInActiveRef?: { current: boolean };
+  fadeInStartRef?: { current: number };
+  introZoomStartRef?: { current: number };
+  INTRO_ZOOM_DUR_MS?: number;
+  START_ZOOM_EXTRA?: number;
+  DUCK_HOLD_MS?: number;
+  DEFAULT_BG_BRIGHTNESS?: number;
+  perfModeRef?: { current: unknown };
+
+  // Stars / warp
+  starsRef?: { current: Array<{ x: number; y: number; brightness: number; twinkleSpeed: number }> };
+  initialAreaRef?: { current: number };
+  isPausedRef?: { current: boolean };
+  warpParticlesRef?: { current: Array<any> };
+  trailsEnabledRef?: { current: boolean };
+  trailsSuspendUntilRef?: { current: number };
+  trailsFadeInStartRef?: { current: number };
+  trailsStrengthRef?: { current: number };
+  lastMissileEventRef?: { current: number };
+
+  // Effects + tunables
+  effectsApplyRef?: { current: { background: boolean; stars: boolean; distantStars: boolean; warpTrails: boolean } };
+  bgOpacityRef?: { current: number };
+  bgContrastRef?: { current: number };
+  bgBrightnessRef?: { current: number };
+
+  // Tractor overlay / HUD
+  tractionBeamRef?: { current?: any };
+  scoreDropUntilRef?: { current: number };
+  livesBrightUntilRef?: { current: number };
+  healthBrightUntilRef?: { current: number };
+  healthDropUntilRef?: { current: number };
+  prevFuelRef?: { current: number };
+  refuelToastUntilRef?: { current: number };
+  lastFuelWarnLevelRef?: { current: 'normal' | 'low' | 'critical' };
+  lastFuelBeepTsRef?: { current: number };
+  soundSystem?: { playLowFuelBeep?: (lvl: 'critical' | 'low') => void; playUiBeep?: () => void };
+
+  // Distortion and overlay
+  distortionRef?: { current?: any };
+  levelEndStartRef?: { current: number };
+
+  // Index signature to allow additional fields without tightening further
+  [key: string]: any;
+};
+
+export type EnvLike = { refs: any };
 
 // Pass A stub: forwarder only. Do not resample time here.
 /** Threaded environment from Game.tsx (refs/config). If prefixed with _, it’s intentionally unused here. */
@@ -209,7 +268,7 @@ export function drawTractorOverlay(
   gameState: GameState,
   env: EnvLike
 ): void {
-  const r = env.refs as any;
+  const r = env.refs;
   const traction = r.tractionBeamRef?.current;
   if (!traction) return;
   const CANVAS_WIDTH = ctx.canvas.width;
@@ -268,7 +327,7 @@ export function drawHUD(
   gameState: GameState,
   env: EnvLike
 ): void {
-  const r = env.refs as any;
+  const r = env.refs;
   const CANVAS_WIDTH = ctx.canvas.width;
   const CANVAS_HEIGHT = ctx.canvas.height;
   const now = performance.now();
@@ -523,7 +582,7 @@ export function drawPlayer(
   env: EnvLike
 ): void {
   const { player } = gameState;
-  const r = env.refs as any;
+  const r = env.refs;
 
   // Helper brought over from Game.tsx
   const computeHealthTier = (health: number, maxHealth: number): number => {
@@ -1169,7 +1228,7 @@ export function drawStars(
   env: EnvLike,
   bgMap: unknown
 ): void {
-  const r = env.refs as any;
+  const r = env.refs;
   const CANVAS_WIDTH = ctx.canvas.width;
   const CANVAS_HEIGHT = ctx.canvas.height;
 
@@ -1375,7 +1434,7 @@ export function drawBackground(
   gameState: GameState,
   env: EnvLike
 ): { sx: number; sy: number; sw: number; sh: number; iw: number; ih: number } | null {
-  const r = env.refs as any;
+  const r = env.refs;
   const bg: HTMLImageElement | null = r.bgImageRef?.current ?? null;
 
   // Mapping info for sampling background brightness under stars (kept local)
