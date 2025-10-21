@@ -55,13 +55,37 @@ export function drawMiniMap(
   ctx.fillRect(x0 + tx * cellW, y0 + ty * cellH, cellW, cellH);
   ctx.restore();
 
-  const drawMarker = (cx: number, cy: number, ring: string, dot: string) => {
+  const drawMarker = (cx: number, cy: number, ring: string, dot: string, label?: string) => {
     ctx.save();
+    // Outer glow for visibility
+    ctx.shadowColor = ring;
+    ctx.shadowBlur = 8;
+    ctx.globalAlpha = prevA * 0.6;
+    ctx.fillStyle = ring;
+    ctx.beginPath(); ctx.arc(cx, cy, 8, 0, Math.PI * 2); ctx.fill();
+    
+    // Bright ring
+    ctx.shadowBlur = 0;
+    ctx.globalAlpha = prevA;
     ctx.strokeStyle = ring;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.stroke();
+    
+    // Bright center dot
     ctx.fillStyle = dot;
-    ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.fill();
+    
+    // Optional label
+    if (label) {
+      ctx.font = 'bold 10px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 3;
+      ctx.strokeText(label, cx, cy + 10);
+      ctx.fillText(label, cx, cy + 10);
+    }
     ctx.restore();
   };
 
@@ -78,7 +102,7 @@ export function drawMiniMap(
     const fy = clamp((st.position?.y ?? 0) / Math.max(1, H), 0, 1);
     const px = safePx(x0 + sx * cellW + fx * cellW);
     const py = safePy(y0 + sy * cellH + fy * cellH);
-    drawMarker(px, py, '#66d9aa', '#88ffcc');
+    drawMarker(px, py, '#66d9aa', '#88ffcc', 'F');
   }
 
   const rw = (gameState as any).rewardShip as { tileX: number; tileY: number; position?: { x: number; y: number } } | undefined;
@@ -89,18 +113,46 @@ export function drawMiniMap(
     const fy = clamp((rw.position?.y ?? 0) / Math.max(1, H), 0, 1);
     const px = safePx(x0 + rx * cellW + fx * cellW);
     const py = safePy(y0 + ry * cellH + fy * cellH);
-    drawMarker(px, py, '#cfe3ff', '#88aaff');
+    drawMarker(px, py, '#cfe3ff', '#88aaff', 'R');
   }
 
   const fx = clamp01(gameState.player.position.x / ctx.canvas.width);
   const fy = clamp01(gameState.player.position.y / ctx.canvas.height);
   const px = x0 + tx * cellW + fx * cellW;
   const py = y0 + ty * cellH + fy * cellH;
-  // Player blip at full opacity
+  
+  // Enhanced player marker with pulsing glow
   ctx.save();
   ctx.globalAlpha = prevA;
+  
+  // Outer pulsing glow
+  const pulseTime = (_env as any)?.frameNow || 0;
+  const pulse = 0.6 + 0.4 * Math.sin(pulseTime * 0.005);
+  ctx.shadowColor = '#00ffff';
+  ctx.shadowBlur = 12 * pulse;
+  ctx.fillStyle = 'rgba(0, 255, 255, 0.4)';
+  ctx.beginPath(); ctx.arc(px, py, 8, 0, Math.PI * 2); ctx.fill();
+  
+  // Bright ring
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#00ffff';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.arc(px, py, 6, 0, Math.PI * 2); ctx.stroke();
+  
+  // Bright center
   ctx.fillStyle = '#ffffff';
-  ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill();
+  
+  // "YOU" label
+  ctx.font = 'bold 10px Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 3;
+  ctx.strokeText('YOU', px, py - 10);
+  ctx.fillText('YOU', px, py - 10);
+  
   ctx.restore();
 
   const vx = gameState.player.velocity.x;
