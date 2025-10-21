@@ -37,12 +37,13 @@ Implement dramatic slow-motion death sequence with camera zoom, explosion, and r
   - Location: Top of file with other imports
   - Import: `createDeathSequence, updateDeathSequence, getDeathCameraOffset, shouldFreezeGameplay`
 
-- [ ] **1.2** Find player death detection code
-  - Location: ~Line 3921 in Game.tsx
+- [x] **1.2** Find player death detection code
+  - Location: Line 3910 in Game.tsx (alien bullet collision)
+  - Location: Line 4115 in Game.tsx (asteroid collision)
   - Current: `if (gameState.player.health <= 0)`
   - Two locations: one for lives > 1, one for game over
 
-- [ ] **1.3** Replace immediate respawn with sequence trigger
+- [x] **1.3** Replace immediate respawn with sequence trigger
   - Store killer position if available (asteroid/alien that hit player)
   - Call `createDeathSequence()` with player position, rotation, hasLivesLeft
   - Set flag to prevent normal respawn logic

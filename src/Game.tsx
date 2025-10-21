@@ -3908,19 +3908,20 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
             
             // Check if player is dead
             if (gameState.player.health <= 0) {
-              // Temporarily disable multi-burst death effect to diagnose Super UFO stutter
-              // deathBurstsRef.current = { pos: { x: gameState.player.position.x, y: gameState.player.position.y }, remaining: 120, spawned: 0 };
-              if (gameState.lives > 1) {
-                // Lose a life and respawn
-                gameState.lives -= 1;
-                gameState.respawning = true;
-                gameState.respawnCountdown = 180;
-                gameState.player.health = gameState.player.maxHealth;
-                gameState.player.position = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
-                gameState.player.velocity = { x: 0, y: 0 };
-                gameState.player.invulnerable = 180;
-                gameState.player.shieldTime = 180;
-              } else {
+              // Trigger cinematic death sequence
+              if (!deathSequenceRef.current) {
+                deathSequenceRef.current = createDeathSequence(
+                  gameState.player.position,
+                  gameState.player.rotation,
+                  gameState.lives > 1,
+                  bullet.position // Killer position (alien bullet)
+                );
+                console.log('💀 Death sequence started (alien bullet)', deathSequenceRef.current);
+              }
+              
+              // Don't respawn immediately - let sequence play
+              // Lives will be decremented when sequence completes
+              if (gameState.lives <= 1) {
                 // No lives left: trigger auto-destruction first, then game over
                 gameOverPendingRef.current = true;
                 
@@ -4113,17 +4114,20 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
             
             // Check if player is dead
             if (gameState.player.health <= 0) {
-              deathBurstsRef.current = { pos: { x: gameState.player.position.x, y: gameState.player.position.y }, remaining: 120, spawned: 0 };
-              if (gameState.lives > 1) {
-                gameState.lives -= 1;
-                gameState.respawning = true;
-                gameState.respawnCountdown = 180;
-                gameState.player.health = gameState.player.maxHealth;
-                gameState.player.position = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
-                gameState.player.velocity = { x: 0, y: 0 };
-                gameState.player.invulnerable = 180;
-                gameState.player.shieldTime = 180;
-              } else {
+              // Trigger cinematic death sequence
+              if (!deathSequenceRef.current) {
+                deathSequenceRef.current = createDeathSequence(
+                  gameState.player.position,
+                  gameState.player.rotation,
+                  gameState.lives > 1,
+                  asteroid.position // Killer position (asteroid)
+                );
+                console.log('💀 Death sequence started (asteroid collision)', deathSequenceRef.current);
+              }
+              
+              // Don't respawn immediately - let sequence play
+              // Lives will be decremented when sequence completes
+              if (gameState.lives <= 1) {
                 // No lives left: trigger auto-destruction first, then game over
                 gameOverPendingRef.current = true;
                 
