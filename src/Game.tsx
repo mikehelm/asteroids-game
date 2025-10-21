@@ -1248,6 +1248,13 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
 
     const gameState = gameStateRef.current;
 
+    // Update death sequence if active
+    if (deathSequenceRef.current?.active) {
+      const now = performance.now();
+      updateDeathSequence(deathSequenceRef.current, now, 16.67); // ~60fps deltaTime
+      console.log('💀 Death sequence phase:', deathSequenceRef.current.phase, 'timeScale:', deathSequenceRef.current.timeScale.toFixed(2));
+    }
+
     // Dev: throttle summary instead of per-30-frame spam
     if (__DEV_MODE__) {
       const gs = gameStateRef.current as any;
