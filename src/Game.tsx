@@ -617,6 +617,9 @@ useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
 const anyModalOpenRef = useRef(false);
 // Freeze clock for rendering while paused (UI-only time freeze)
 const pauseFreezeNowRef = useRef<number | undefined>(undefined);
+// Track pause time to adjust stage timing
+const pauseStartTimeRef = useRef<number>(0);
+const totalPausedTimeRef = useRef<number>(0);
 
 // Helper: directly set the canvas pixel size and remember base dims
   // Instantiate keyboard handlers via factory (stable identity)
@@ -691,6 +694,16 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     freezeRenderClockOnPause({ isPausedRef, pauseFreezeNowRef });
     log('pause:toggle', { paused: isPaused });
+    
+    // Track pause time to adjust stage timing
+    if (isPaused) {
+      pauseStartTimeRef.current = Date.now();
+    } else if (pauseStartTimeRef.current > 0) {
+      // Resuming from pause - add paused duration to total
+      const pauseDuration = Date.now() - pauseStartTimeRef.current;
+      totalPausedTimeRef.current += pauseDuration;
+      pauseStartTimeRef.current = 0;
+    }
   }, [isPaused]);
   // Music UX toggles (UI only)
   // Removed unused music UX toggles to satisfy lint (no functional change)
@@ -1400,7 +1413,7 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
       if (gameState.gameRunning && !isPausedRef.current && !anyModalOpen) {
         // Spawn asteroids after 1 second (original gate)
         {
-          const timeSinceStageStart = Date.now() - gameState.stageStartTime;
+          const timeSinceStageStart = Date.now() - gameState.stageStartTime - totalPausedTimeRef.current;
           if (timeSinceStageStart >= 1000 && !gameState.asteroidsSpawned) {
             const newAsteroids = createStageAsteroids(gameState.stage, difficultyRef.current);
             gameState.asteroids = newAsteroids;
@@ -1865,9 +1878,10 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
         soundSystem.stopThrust();
       }
 
-      // Check if it's time to spawn alien ships
+      // Check if it's time to spawn alien ships (only when not paused)
+      if (!isPausedRef.current && !anyModalOpen) {
       const currentTime = Date.now();
-      const timeSinceStageStart = currentTime - gameState.stageStartTime;
+      const timeSinceStageStart = currentTime - gameState.stageStartTime - totalPausedTimeRef.current;
       
       // Play scary approach music 2 seconds before alien spawn
       if (timeSinceStageStart >= gameState.stageWaitTime - 2000 && !gameState.alienApproachMusicPlayed) {
@@ -1935,6 +1949,7 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
         gameState.alienShips.push(nextAlien);
         gameState.alienSpawnCount++;
       }
+      } // End pause check for alien spawning
 
       // Auto-fire logic: shoot straight ahead if target will intersect bullet path
       if (autoFireEnabledRef.current && gameState.gameRunning && !isPausedRef.current && !anyModalOpen) {
@@ -4463,6 +4478,7 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
             gameState.levelComplete = false;
             gameState.warpEffect = 0;
             gameState.stageStartTime = Date.now();
+            totalPausedTimeRef.current = 0; // Reset pause time for new stage
             gameState.alienSpawnCount = 0;
             gameState.alienApproachMusicPlayed = false;
             gameState.asteroidsSpawned = false;
