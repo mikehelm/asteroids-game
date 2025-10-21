@@ -169,7 +169,7 @@ export default function InfoPopup({ open, onClose }: Props) {
       return null;
     };
 
-    // Mouse tracking - attach to parent div to ensure it works
+    // Mouse/Touch tracking - attach to parent div to ensure it works
     const handleMouseMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       mouseX = ((e.clientX - rect.left) / rect.width) * canvas.width;
@@ -177,10 +177,22 @@ export default function InfoPopup({ open, onClose }: Props) {
       hasMouseMoved = true;
     };
 
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length > 0) {
+        const touch = e.touches[0];
+        const rect = canvas.getBoundingClientRect();
+        mouseX = ((touch.clientX - rect.left) / rect.width) * canvas.width;
+        mouseY = ((touch.clientY - rect.top) / rect.height) * canvas.height;
+        hasMouseMoved = true;
+        e.preventDefault(); // Prevent scrolling while touching
+      }
+    };
+
     // Attach to parent element instead of canvas
     const parentDiv = canvas.parentElement;
     if (parentDiv) {
       parentDiv.addEventListener('mousemove', handleMouseMove);
+      parentDiv.addEventListener('touchmove', handleTouchMove, { passive: false });
     }
 
     // Ship rendering functions (from game)
@@ -436,6 +448,7 @@ export default function InfoPopup({ open, onClose }: Props) {
       }
       if (parentDiv) {
         parentDiv.removeEventListener('mousemove', handleMouseMove);
+        parentDiv.removeEventListener('touchmove', handleTouchMove);
       }
     };
   }, [open]);
