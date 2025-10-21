@@ -246,8 +246,8 @@ export default function InfoPopup({ open, onClose }: Props) {
       else if (elapsed < 4) tier = 4;
       else tier = 5; // Stay at tier 5 (healthiest)
       
-      // After 5 seconds, start following mouse
-      if (elapsed >= 5) {
+      // Start following mouse immediately (while cycling through tiers)
+      {
         // Determine target (waypoint or mouse)
         let targetX = mouseX;
         let targetY = mouseY;
