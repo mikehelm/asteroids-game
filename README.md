@@ -2,6 +2,8 @@
 
 A classic Asteroids-style space shooter game built with React, TypeScript, and HTML5 Canvas.
 
+**Now with mobile touch controls!** 🎮📱
+
 ## Features
 
 - **Classic Asteroids Gameplay**: Navigate your ship through space, destroying asteroids and alien ships
