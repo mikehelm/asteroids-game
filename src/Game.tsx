@@ -607,6 +607,9 @@ const fadeInStartRef = useRef<number>(0);
 const fadeInActiveRef = useRef<boolean>(false);
 const gameOverStartRef = useRef<number | null>(null);
 
+// Cinematic death sequence
+const deathSequenceRef = useRef<import('./systems/cinematicDeath').DeathSequenceState | null>(null);
+
 // ...
 
 // Pause control (game auto-start behavior remains unchanged)
@@ -617,9 +620,6 @@ useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
 const anyModalOpenRef = useRef(false);
 // Freeze clock for rendering while paused (UI-only time freeze)
 const pauseFreezeNowRef = useRef<number | undefined>(undefined);
-// Track pause time to adjust stage timing
-const pauseStartTimeRef = useRef<number>(0);
-const totalPausedTimeRef = useRef<number>(0);
 
 // Helper: directly set the canvas pixel size and remember base dims
   // Instantiate keyboard handlers via factory (stable identity)
@@ -694,16 +694,6 @@ const totalPausedTimeRef = useRef<number>(0);
   useEffect(() => {
     freezeRenderClockOnPause({ isPausedRef, pauseFreezeNowRef });
     log('pause:toggle', { paused: isPaused });
-    
-    // Track pause time to adjust stage timing
-    if (isPaused) {
-      pauseStartTimeRef.current = Date.now();
-    } else if (pauseStartTimeRef.current > 0) {
-      // Resuming from pause - add paused duration to total
-      const pauseDuration = Date.now() - pauseStartTimeRef.current;
-      totalPausedTimeRef.current += pauseDuration;
-      pauseStartTimeRef.current = 0;
-    }
   }, [isPaused]);
   // Music UX toggles (UI only)
   // Removed unused music UX toggles to satisfy lint (no functional change)
@@ -1413,7 +1403,7 @@ const totalPausedTimeRef = useRef<number>(0);
       if (gameState.gameRunning && !isPausedRef.current && !anyModalOpen) {
         // Spawn asteroids after 1 second (original gate)
         {
-          const timeSinceStageStart = Date.now() - gameState.stageStartTime - totalPausedTimeRef.current;
+          const timeSinceStageStart = Date.now() - gameState.stageStartTime;
           if (timeSinceStageStart >= 1000 && !gameState.asteroidsSpawned) {
             const newAsteroids = createStageAsteroids(gameState.stage, difficultyRef.current);
             gameState.asteroids = newAsteroids;
@@ -1881,7 +1871,7 @@ const totalPausedTimeRef = useRef<number>(0);
       // Check if it's time to spawn alien ships (only when not paused)
       if (!isPausedRef.current && !anyModalOpen) {
       const currentTime = Date.now();
-      const timeSinceStageStart = currentTime - gameState.stageStartTime - totalPausedTimeRef.current;
+      const timeSinceStageStart = currentTime - gameState.stageStartTime;
       
       // Play scary approach music 2 seconds before alien spawn
       if (timeSinceStageStart >= gameState.stageWaitTime - 2000 && !gameState.alienApproachMusicPlayed) {
@@ -4478,7 +4468,6 @@ const totalPausedTimeRef = useRef<number>(0);
             gameState.levelComplete = false;
             gameState.warpEffect = 0;
             gameState.stageStartTime = Date.now();
-            totalPausedTimeRef.current = 0; // Reset pause time for new stage
             gameState.alienSpawnCount = 0;
             gameState.alienApproachMusicPlayed = false;
             gameState.asteroidsSpawned = false;
