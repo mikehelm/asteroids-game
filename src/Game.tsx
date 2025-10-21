@@ -630,7 +630,6 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
     CANVAS_HEIGHT,
     soundSystem,
     requestRestart: () => { try { initGame(); } catch {} },
-    togglePause: () => setIsPaused(p => !p),
 
     unlimitedMissilesRef,
     lastMissileFireAtRef,
@@ -1869,8 +1868,7 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
         soundSystem.stopThrust();
       }
 
-      // Check if it's time to spawn alien ships (only when not paused)
-      if (!isPausedRef.current && !anyModalOpen) {
+      // Check if it's time to spawn alien ships
       const currentTime = Date.now();
       const timeSinceStageStart = currentTime - gameState.stageStartTime;
       
@@ -1940,7 +1938,6 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
         gameState.alienShips.push(nextAlien);
         gameState.alienSpawnCount++;
       }
-      } // End pause check for alien spawning
 
       // Auto-fire logic: shoot straight ahead if target will intersect bullet path
       if (autoFireEnabledRef.current && gameState.gameRunning && !isPausedRef.current && !anyModalOpen) {

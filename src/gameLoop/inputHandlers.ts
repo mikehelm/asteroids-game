@@ -13,8 +13,6 @@ export type InputDeps = {
   soundSystem: any;
   // optional restart callback wired by Game.tsx
   requestRestart?: () => void;
-  // pause toggle callback to properly update React state
-  togglePause?: () => void;
 
   // missile + trails control
   unlimitedMissilesRef: MutableRef<boolean>;
@@ -159,12 +157,7 @@ export function createInputHandlers(deps: InputDeps) {
     // Pause toggle (works even if currently paused)
     if (e.key === 'p' || e.key === 'P') {
       e.preventDefault();
-      // Use callback to properly update React state, fallback to direct toggle
-      if (deps.togglePause) {
-        deps.togglePause();
-      } else {
-        isPausedRef.current = !isPausedRef.current;
-      }
+      isPausedRef.current = !isPausedRef.current;
       return;
     }
     // Restart: immediate if game over, with confirmation if mid-game
