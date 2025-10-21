@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# If there's no package.json, or npm is unavailable, bail gracefully
+if [ ! -f package.json ]; then
+  exit 0
+fi
+
+# Detect the guard script; if missing, skip quietly
+if npm run | grep -q "lint:render-clocks"; then
+  echo "pre-commit: Running render-clock guard…"
+  npm run -s lint:render-clocks
+else
+  echo "pre-commit: Skipping render-clock guard (script not found)."
+fi

@@ -39,11 +39,10 @@ export function renderTractorOverlay(
     text = 'ATTACHED';
   } else if (state.phase === 'displaying') {
     text = 'ANALYZING';
-  } else if (state.phase === 'pushing') {
-    text = 'RELEASING';
   }
   // --- Near-asteroid status label with edge-aware placement ---
-  if (state.targetAsteroid) {
+  // Only draw if we have text to show (skip empty label during pushing phase)
+  if (state.targetAsteroid && text) {
     const w = ctx.canvas.width;
     const h = ctx.canvas.height;
     const a = state.targetAsteroid;
@@ -134,16 +133,14 @@ export function renderTractorOverlay(
     ctx.stroke();
     ctx.restore();
 
-    if (text) {
-      // Text (outline + fill) — keep existing cyan styling
-      ctx.strokeStyle = '#000000';
-      ctx.lineWidth = 2;
-      ctx.globalAlpha = 0.95;
-      ctx.strokeText(text, px, py);
-      ctx.fillStyle = '#00ffff';
-      ctx.globalAlpha = 1;
-      ctx.fillText(text, px, py);
-    }
+    // Text (outline + fill) — keep existing cyan styling
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.95;
+    ctx.strokeText(text, px, py);
+    ctx.fillStyle = '#00ffff';
+    ctx.globalAlpha = 1;
+    ctx.fillText(text, px, py);
   }
   
   // Data link FX: packets flowing between ship (predicted orbit point) and asteroid
@@ -202,13 +199,32 @@ export function renderScanGrid(ctx: CanvasRenderingContext2D, state: RenderState
   const top = ay - r;
 
   ctx.save();
-  // Circle clip to asteroid surface to prevent square bleed
+  ctx.translate(ax, ay);
+  ctx.rotate(a.rotation);
+  
+  // Clip to asteroid's actual shape if available, otherwise use circle
+  const anyAst = a as typeof a & { shapePoints?: Array<{x:number,y:number}> };
   ctx.beginPath();
-  ctx.arc(ax, ay, r, 0, Math.PI * 2);
+  if (anyAst.shapePoints && anyAst.shapePoints.length > 0) {
+    // Use asteroid's actual polygon shape for clipping
+    anyAst.shapePoints.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.closePath();
+  } else {
+    // Fallback to circle
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+  }
   ctx.clip();
+  
+  // Reset transform for grid drawing
+  ctx.rotate(-a.rotation);
+  ctx.translate(-ax, -ay);
+  
   ctx.setLineDash([3, 4]);
   ctx.lineDashOffset = (now * 0.05) % 8;
-  ctx.strokeStyle = 'rgba(120, 255, 160, 0.35)';
+  ctx.strokeStyle = 'rgba(120, 255, 160, 0.5)'; // 50% transparent
   ctx.lineWidth = 1;
   for (let i = 0; i <= cols; i++) {
     const x = left + i * size;
@@ -261,10 +277,11 @@ export function renderFlipit(
     };
 
     // Centralized decode config
-    const DECODE_DURATION_MS = beamUi.DECODE_DURATION_MS;
+    const DECODE_DURATION_MS = 2000; // 2 seconds decode
     const MULTIPLIER_DELAY_MS = beamUi.MULTIPLIER_DELAY_MS;
-    const CLEANUP_FADE_MS = 600;
-    const FINAL_STAY_MS = beamUi.FINAL_STAY_MS;
+    const FINAL_STAY_MS = 5000; // 5 seconds linger
+    const FADE_DURATION_MS = 1000; // 1 second fade
+    const FADE_EARLIER_MS = 2000; // 2 second fade for percent and multiplier
     const FINAL_DRIFT_PX = beamUi.FINAL_DRIFT_PX;
 
     const cx = (ctx.canvas?.width ?? canvasWidth) / 2;
@@ -303,14 +320,15 @@ export function renderFlipit(
     // Combined reveal timing and drift
     const combinedStart = (state.decodeStartTime ?? state.displayStartTime ?? now)
       + DECODE_DURATION_MS + MULTIPLIER_DELAY_MS + 400;
-    const appearT = Math.min(1, Math.max(0, (now - combinedStart) / FINAL_STAY_MS));
+    const elapsedSinceCombined = Math.max(0, now - combinedStart);
+    const appearT = Math.min(1, elapsedSinceCombined / FINAL_STAY_MS);
     const baseCombinedX = multX + (multW / 2) + beamUi.GAP_MULT_TO_COMBINED + (combW / 2);
     const driftDir = Math.sign(cx - baseCombinedX) || 1;
     const driftMagnitude = FINAL_DRIFT_PX;
     const driftX = driftDir * Math.min(driftMagnitude, Math.abs(cx - baseCombinedX)) * appearT;
 
-    // Fade percent and multiplier when combined appears
-    const fadeProgress = now >= combinedStart ? Math.min(1, (now - combinedStart) / 400) : 0;
+    // Fade percent and multiplier when combined appears (2s fade)
+    const fadeProgress = now >= combinedStart ? Math.min(1, elapsedSinceCombined / FADE_EARLIER_MS) : 0;
     const pctAlpha = 1 - fadeProgress;
     const multAlpha = 1 - fadeProgress;
 
@@ -336,63 +354,25 @@ export function renderFlipit(
         ctx.fillText(multTxt, multX, cy);
       }
 
-      // final combined result at full alpha with drift
+      // Final combined result: full alpha during linger, then fade over 1s
       const combined = combStr;
-      ctx.globalAlpha = 1;
+      let combinedAlpha = 1.0;
+      if (elapsedSinceCombined > FINAL_STAY_MS) {
+        const fadeT = Math.min(1, (elapsedSinceCombined - FINAL_STAY_MS) / FADE_DURATION_MS);
+        combinedAlpha = 1.0 - fadeT;
+      }
+      ctx.globalAlpha = combinedAlpha;
       ctx.strokeText(combined, baseCombinedX + driftX, cy);
       ctx.fillStyle = '#76e0a9';
       ctx.fillText(combined, baseCombinedX + driftX, cy);
 
-      // Mark decode done time once extras should fade away window passes
-      if (now - combinedStart > CLEANUP_FADE_MS) {
+      // Mark decode done time once fade completes
+      if (elapsedSinceCombined > FINAL_STAY_MS + FADE_DURATION_MS) {
         if (!state.decodeDoneTime) state.decodeDoneTime = now;
       }
     }
     ctx.restore();
   }
   
-  // After pushing phase, render drifting dropped Flipit text if timers are set
-  if (state.phase === 'pushing' || (!state.active && state.textHoldUntil)) {
-    const holdTime = state.textHoldUntil ?? 0;
-    const fadeTime = state.textFadeUntil ?? 0;
-    
-    if (fadeTime > 0 && now < fadeTime && state.textAnchorX != null && state.textAnchorY != null) {
-      let alpha = 1.0;
-      if (now > holdTime) {
-        // Fade out phase
-        const fadeProgress = (now - holdTime) / (fadeTime - holdTime);
-        alpha = Math.max(0, 1 - fadeProgress);
-      }
-      
-      if (alpha > 0 && state.flipitChance) {
-        // Calculate drifting position
-        const dropStart = state.textDropStart || (holdTime - 3000);
-        const driftTime = now - dropStart;
-        const velX = state.textVelX || 0;
-        const velY = state.textVelY || 0;
-        const x = (state.textAnchorX as number) + velX * driftTime;
-        const y = (state.textAnchorY as number) + velY * driftTime;
-        
-        ctx.save();
-        ctx.globalAlpha = alpha * 0.9;
-        
-        const percentage = (state.flipitChance * 100).toFixed(1);
-        const text = `Flipit: ${percentage}%`;
-        
-        ctx.font = 'bold 20px Arial';
-        ctx.textAlign = 'center';
-        
-        // Black outline
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 2;
-        ctx.strokeText(text, x, y);
-        
-        // Yellow fill
-        ctx.fillStyle = '#ffeb3b';
-        ctx.fillText(text, x, y);
-        
-        ctx.restore();
-      }
-    }
-  }
+  // Post-eject floating text removed - reward info now shown in HUD
 }

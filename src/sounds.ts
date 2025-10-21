@@ -1,5 +1,28 @@
 // Sound effect system using Web Audio API
 import type { TrackInfo } from './types';
+import type { YouTubeVideo, YouTubeChannel, MusicSource } from './youtube/types';
+import {
+  initializeYouTubePlayer,
+  playYouTubeVideo,
+  pauseYouTubePlayer,
+  resumeYouTubePlayer,
+  stopYouTubePlayer,
+  setYouTubeVolume,
+  muteYouTubePlayer,
+  unmuteYouTubePlayer,
+  isYouTubePlaying,
+  getCurrentVideo,
+  onYouTubeVideoEnd,
+  onYouTubeError,
+  isPlayerReady,
+} from './youtube/youtubePlayer';
+import {
+  fetchYouTubePlaylist,
+  getRandomYouTubeVideo,
+  checkInternetConnection,
+  getCachedChannel,
+} from './youtube/youtubeApi';
+import { YOUTUBE_CONFIG } from './config/youtube';
 
 // Internal and public audio types
 interface TrackMeta { key: string; url: string; name: string; ext: string }
@@ -22,7 +45,7 @@ class SoundSystemImpl {
   private musicVolume = 0.25; // default music vol
 
   // Music player state
-  private musicAssetUrls: Record<string, string> = import.meta.glob<string>('../sounds/music/*', { eager: true, as: 'url' });
+  private musicAssetUrls: Record<string, string> = import.meta.glob<string>('../sounds/music/*', { eager: true, import: 'default', query: '?url' });
   private musicTracks: Array<{ key: string; url: string; name: string; ext: string }>|null = null;
   private musicSource: AudioBufferSourceNode | null = null;
   // We index into a filtered "view" (safe-only by default). This is the index visible to the UI.
@@ -38,12 +61,24 @@ class SoundSystemImpl {
   // Bad UFO loop node
   private badUfoLoopSrc: AudioBufferSourceNode | null = null;
   private badUfoLoopGain: GainNode | null = null;
+  private badUfoLoopLoading: boolean = false;
+  private lastMissileWarningAt: number = 0;
+  private lastEpicUfoAt: number = 0;
   // Guard against duplicated timers/races
   private musicSessionId: number = 0; // increments on each playMusic() start
   // Risqué toggle (false by default means only numbered tracks are listed/used)
   private risqueEnabled: boolean = false;
   // Explicit pause flag to block any auto-advance or scheduled resumes
   private musicPaused: boolean = false;
+
+  // YouTube Music Integration
+  private youtubeEnabled: boolean = false; // Default: OFF (user must enable)
+  private youtubePlayerReady: boolean = false;
+  private youtubePlaylistLoaded: boolean = false;
+  private currentYouTubeVideo: YouTubeVideo | null = null;
+  private musicSourceType: MusicSource = 'mixed'; // 'local' | 'youtube' | 'mixed'
+  private hasInternet: boolean = true;
+  private youtubeStateChangeCallback: ((video: YouTubeVideo | null, channel: YouTubeChannel | null, isPlaying: boolean) => void) | null = null;
 
   constructor() {
     // Initialize audio context on first user interaction
@@ -163,7 +198,7 @@ class SoundSystemImpl {
   }
 
   playAlienDestroyPanned(panProvider: () => number) {
-    this.playOneShotPanned('killedalien.mp3', { volume: 0.91 }, panProvider);
+    this.playOneShotPanned('killedalien.mp3', { volume: 1.2 }, panProvider);
   }
 
   playLargeAsteroidDestroyPanned(panProvider: () => number) {
@@ -397,14 +432,20 @@ class SoundSystemImpl {
   startBadUfoLoop(volume: number = 1.0): { stop: () => void } | null {
     this.ensureAudioContext();
     if (!this.isAudioAllowed() || !this.audioContext) return null;
-    if (this.badUfoLoopSrc) {
-      // already running
+    // Prevent overlapping starts: if already running or loading, no-op
+    if (this.badUfoLoopSrc || this.badUfoLoopLoading) {
       return { stop: () => this.stopBadUfoLoop() };
     }
+    // Proactively stop any stale nodes before starting fresh
+    this.stopBadUfoLoop();
     // Load epic_ufo.wav and loop it
     const start = async () => {
+      this.badUfoLoopLoading = true;
       const buf = await this.loadBuffer('epic_ufo.wav');
-      if (!buf || !this.audioContext) return;
+      if (!buf || !this.audioContext) {
+        this.badUfoLoopLoading = false;
+        return;
+      }
       const src = this.audioContext.createBufferSource();
       src.buffer = buf;
       src.loop = true;
@@ -415,6 +456,7 @@ class SoundSystemImpl {
       src.start();
       this.badUfoLoopSrc = src;
       this.badUfoLoopGain = gain;
+      this.badUfoLoopLoading = false;
     };
     start();
     return { stop: () => this.stopBadUfoLoop() };
@@ -430,6 +472,7 @@ class SoundSystemImpl {
     }
     this.badUfoLoopSrc = null;
     this.badUfoLoopGain = null;
+    this.badUfoLoopLoading = false;
   }
 
   // Fade out the bad UFO loop over the given duration and then stop it
@@ -459,6 +502,7 @@ class SoundSystemImpl {
       try { this.badUfoLoopGain?.disconnect(); } catch { /* no-op */ }
       this.badUfoLoopSrc = null;
       this.badUfoLoopGain = null;
+      this.badUfoLoopLoading = false;
     }, Math.max(0, durationMs + 150));
   }
 
@@ -488,13 +532,16 @@ class SoundSystemImpl {
     });
   }
 
-  // Play explicit missile warning asset if available
+  // Play explicit missile warning asset if available (debounced)
   playMissileWarning() {
     if (!this.isAudioAllowed()) return;
+    const nowMs = Date.now();
+    if (nowMs - this.lastMissileWarningAt < 500) return;
+    this.lastMissileWarningAt = nowMs;
     const p = this.loadBuffer('missle_warning.wav');
     p.then(buf => {
       if (buf) {
-        this.playBuffer(buf, { volume: 0.3 });
+        this.playBuffer(buf, { volume: 0.05 });
       } else {
         // Fallback beeping pattern
         const ac = this.audioContext!;
@@ -507,7 +554,7 @@ class SoundSystemImpl {
         gain.gain.setValueAtTime(0.0001, t0);
         for (let i = 0; i < 3; i++) {
           const t = t0 + i * 0.1;
-          gain.gain.exponentialRampToValueAtTime(0.03 * this.masterVolume, t + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.0015 * this.masterVolume, t + 0.02);
           gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
         }
         osc.start();
@@ -516,9 +563,12 @@ class SoundSystemImpl {
     });
   }
 
-  // Play epic UFO approach cue for missile-type spawns
+  // Play epic UFO approach cue for missile-type spawns (debounced)
   playEpicUfo() {
     if (!this.isAudioAllowed()) return;
+    const nowMs = Date.now();
+    if (nowMs - this.lastEpicUfoAt < 2000) return;
+    this.lastEpicUfoAt = nowMs;
     const p = this.loadBuffer('epic_ufo.wav');
     p.then(buf => {
       if (buf) {
@@ -711,7 +761,7 @@ class SoundSystemImpl {
   // --- Asset management ---
   // Use Vite to load all files under ../sounds as URLs
   // The keys are absolute-ish module paths; values are the final URLs
-  private assetUrls: Record<string, string> = import.meta.glob<string>('../sounds/*', { eager: true, as: 'url' });
+  private assetUrls: Record<string, string> = import.meta.glob<string>('../sounds/*', { eager: true, import: 'default', query: '?url' });
 
   private resolveAssetUrl(fileName: string): string | null {
     // Find the entry whose path ends with /sounds/<fileName>
@@ -1399,6 +1449,13 @@ class SoundSystemImpl {
     if (!this.isAudioAllowed()) return;
     if (!this.audioContext) return;
     this.musicPaused = false;
+    
+    // Check if we should play YouTube instead
+    if (this.shouldPlayYouTube()) {
+      await this.playYouTubeTrack();
+      return;
+    }
+    
     if (typeof index === 'number') {
       this.musicCurrentViewIndex = index;
       this.musicOffsetSec = 0;
@@ -1504,6 +1561,14 @@ class SoundSystemImpl {
   }
 
   pauseMusic(): void {
+    // Handle YouTube pause
+    if (this.currentYouTubeVideo && isYouTubePlaying()) {
+      pauseYouTubePlayer();
+      this.musicPaused = true;
+      return;
+    }
+    
+    // Handle local music pause
     if (!this.audioContext) return;
     if (!this.musicSource) return;
     const elapsed = this.audioContext.currentTime - this.musicStartCtxTime;
@@ -1517,8 +1582,16 @@ class SoundSystemImpl {
   }
 
   resumeMusic(): void {
-    if (!this.audioContext) return;
     this.musicPaused = false;
+    
+    // Handle YouTube resume
+    if (this.currentYouTubeVideo) {
+      resumeYouTubePlayer();
+      return;
+    }
+    
+    // Handle local music resume
+    if (!this.audioContext) return;
     this.playMusic().catch(() => {});
   }
 
@@ -1527,6 +1600,15 @@ class SoundSystemImpl {
     this.musicPaused = false;
     this.musicStopping = true;
     this.stopCurrentMusicNode();
+    
+    // Also stop YouTube if playing
+    if (this.currentYouTubeVideo) {
+      stopYouTubePlayer();
+      this.currentYouTubeVideo = null;
+      if (this.youtubeStateChangeCallback) {
+        this.youtubeStateChangeCallback(null, null, false);
+      }
+    }
   }
 
   // Select track without starting playback (resets resume offset)
@@ -1585,6 +1667,13 @@ class SoundSystemImpl {
 
   setMusicVolume(v: number): void {
     this.musicVolume = Math.max(0, Math.min(1, v));
+    
+    // Sync YouTube volume
+    if (this.youtubePlayerReady) {
+      setYouTubeVolume(this.musicVolume * 100); // Convert to 0-100
+    }
+    
+    // Handle local music volume
     if (this.musicGain && !this.muted) {
       this.musicGain.gain.setValueAtTime(this.musicVolume, this.audioContext!.currentTime);
     }
@@ -1653,6 +1742,183 @@ class SoundSystemImpl {
     gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
     osc.start(now);
     osc.stop(now + 0.3);
+  }
+
+  // ========== YouTube Music Integration ==========
+
+  private youtubeInitFailed: boolean = false;
+  private youtubeInitInProgress: boolean = false;
+
+  // Initialize YouTube player (call when user enables YouTube)
+  async initYouTube(): Promise<void> {
+    // Guard: Don't retry if previously failed
+    if (this.youtubeInitFailed) {
+      return;
+    }
+
+    // Guard: Don't init if already in progress
+    if (this.youtubeInitInProgress) {
+      return;
+    }
+
+    // Guard: Don't re-init if already ready
+    if (this.youtubePlayerReady && this.youtubePlaylistLoaded) {
+      return;
+    }
+
+    this.youtubeInitInProgress = true;
+
+    try {
+      await initializeYouTubePlayer();
+      this.youtubePlayerReady = true;
+      
+      // Set up callbacks
+      onYouTubeVideoEnd(() => {
+        this.handleYouTubeEnd();
+      });
+      
+      onYouTubeError((error) => {
+        console.error('YouTube error:', error);
+        this.youtubeEnabled = false;
+      });
+      
+      // Fetch playlist (uses hard-coded channel ID - only 4 units!)
+      const playlist = await fetchYouTubePlaylist();
+      if (playlist) {
+        this.youtubePlaylistLoaded = true;
+      } else {
+        // Mark as failed to prevent retries
+        this.youtubeInitFailed = true;
+        console.error('Failed to load YouTube playlist. Check API key in .env.local or network connection');
+        this.youtubeEnabled = false;
+      }
+      
+      // Check internet
+      this.hasInternet = await checkInternetConnection();
+    } catch (error) {
+      console.error('YouTube initialization failed:', error);
+      this.youtubeInitFailed = true;
+      this.youtubeEnabled = false;
+    } finally {
+      this.youtubeInitInProgress = false;
+    }
+  }
+
+  // Decide whether to play YouTube or local
+  private shouldPlayYouTube(): boolean {
+    if (!this.youtubeEnabled || !this.youtubePlayerReady || !this.hasInternet || !this.youtubePlaylistLoaded) {
+      return false;
+    }
+    
+    if (this.musicSourceType === 'youtube') {
+      return true; // User wants YouTube only
+    }
+    
+    if (this.musicSourceType === 'local') {
+      return false; // User wants local only
+    }
+    
+    // Mixed mode: 10% chance for YouTube, 90% local
+    return Math.random() < YOUTUBE_CONFIG.YOUTUBE_PLAY_CHANCE;
+  }
+
+  // Play a YouTube video
+  private async playYouTubeTrack(): Promise<void> {
+    const video = getRandomYouTubeVideo();
+    if (!video) {
+      // Only fall back to local if in mixed mode, not if user explicitly chose YouTube-only
+      if (this.musicSourceType !== 'youtube') {
+        await this.playMusic();
+      }
+      return;
+    }
+    
+    // Stop any local music
+    if (this.musicSource) {
+      this.musicSource.stop();
+      this.musicSource = null;
+    }
+    
+    this.currentYouTubeVideo = video;
+    await playYouTubeVideo(video);
+    
+    // Sync volume
+    setYouTubeVolume(this.musicVolume * 100);
+    
+    // Notify UI
+    if (this.youtubeStateChangeCallback) {
+      this.youtubeStateChangeCallback(video, getCachedChannel(), true);
+    }
+  }
+
+  // Handle YouTube video end
+  private handleYouTubeEnd(): void {
+    // Notify UI
+    if (this.youtubeStateChangeCallback) {
+      this.youtubeStateChangeCallback(null, null, false);
+    }
+    
+    this.currentYouTubeVideo = null;
+    
+    // Play next track after gap
+    setTimeout(() => {
+      this.playNextTrack();
+    }, this.musicGapMs);
+  }
+
+  // Play next track (YouTube or local)
+  private playNextTrack(): void {
+    // Advance to next track index for local songs
+    const view = this.getCurrentViewIndices();
+    const nextIndex = view.length > 0 ? (this.musicCurrentViewIndex + 1) % view.length : 0;
+    this.musicCurrentViewIndex = nextIndex;
+    this.musicOffsetSec = 0;
+    
+    // playMusic will check shouldPlayYouTube() internally
+    this.playMusic().catch(() => {});
+  }
+
+  // Public API for UI
+  async setMusicSource(source: MusicSource): Promise<void> {
+    this.musicSourceType = source;
+    
+    // If switching to YouTube mode and playlist isn't loaded, try loading it
+    if (source === 'youtube' && !this.youtubePlaylistLoaded && this.youtubeEnabled) {
+      try {
+        const playlist = await fetchYouTubePlaylist();
+        if (playlist) {
+          this.youtubePlaylistLoaded = true;
+        }
+      } catch (error) {
+        console.error('Error loading playlist:', error);
+      }
+    }
+  }
+
+  setYouTubeEnabled(enabled: boolean): void {
+    this.youtubeEnabled = enabled;
+    if (!enabled && this.currentYouTubeVideo) {
+      stopYouTubePlayer();
+      this.currentYouTubeVideo = null;
+      // Start local music
+      this.playMusic().catch(() => {});
+    }
+  }
+
+  onYouTubeStateChange(callback: (video: YouTubeVideo | null, channel: YouTubeChannel | null, isPlaying: boolean) => void): void {
+    this.youtubeStateChangeCallback = callback;
+  }
+
+  getCurrentYouTubeVideo(): YouTubeVideo | null {
+    return this.currentYouTubeVideo;
+  }
+
+  getYouTubeChannel(): YouTubeChannel | null {
+    return getCachedChannel();
+  }
+
+  isYouTubeCurrentlyPlaying(): boolean {
+    return isYouTubePlaying();
   }
 }
 

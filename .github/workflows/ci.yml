@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Render-clock guard (optional)
+        run: |
+          if npm run | grep -q "lint:render-clocks"; then
+            echo "Running render-clock guard…"
+            npm run lint:render-clocks
+          else
+            echo "Skipping render-clock guard (script not found)."
+          fi

@@ -1,46 +1,404 @@
+/* Backdrop with enhanced blur */
 .ip-backdrop {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.75);
-  display: flex; align-items: center; justify-content: center;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   z-index: 60;
-  backdrop-filter: blur(4px);
+  backdrop-filter: blur(8px);
+  animation: ip-backdrop-in 300ms ease-out;
 }
 
+@keyframes ip-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Main Card with gradient border and glow */
 .ip-card {
-  width: min(720px, 90vw);
-  max-height: 85vh;
+  position: relative;
+  width: min(780px, 92vw);
+  max-height: 90vh;
   color: white;
-  background: rgba(15,20,28,0.95);
-  border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 20px;
-  padding: 32px 36px 28px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.05);
-  animation: ip-in 200ms ease-out;
+  background: linear-gradient(145deg, rgba(15, 20, 35, 0.98), rgba(10, 15, 28, 0.98));
+  border: 1px solid rgba(79, 124, 255, 0.3);
+  border-radius: 24px;
+  padding: 40px 48px 36px;
+  box-shadow: 
+    0 30px 80px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(79, 124, 255, 0.15),
+    0 0 60px rgba(79, 124, 255, 0.15);
+  animation: ip-card-in 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
   overflow-y: auto;
 }
 
-@keyframes ip-in { from { transform: translateY(6px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
-
-.ip-title { font-size: 24px; font-weight: 800; margin: 8px 0 20px; }
-
-.ip-list { list-style: disc; padding-left: 24px; margin: 0 0 20px; }
-.ip-list li { margin: 10px 0; line-height: 1.6; font-size: 16px; }
-
-.ip-foot { opacity: 0.8; margin: 16px 0 20px; font-size: 15px; line-height: 1.5; }
-
-.ip-cta {
-  display: inline-flex; flex-direction: column; align-items: center;
-  gap: 2px;
-  background: #4f7cff;
-  border: none; color: white; border-radius: 10px;
-  padding: 10px 14px; font-weight: 700; cursor: pointer;
+@keyframes ip-card-in {
+  from {
+    transform: scale(0.9) translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
 }
-.ip-cta:focus { outline: 2px solid white; outline-offset: 2px; }
 
-.ip-sub { font-size: 12px; opacity: 0.9; }
+/* Hero Section */
+.ip-hero {
+  text-align: center;
+  margin-bottom: 32px;
+  position: relative;
+}
 
+.ip-icon-burst {
+  font-size: 64px;
+  margin-bottom: 16px;
+  animation: ip-burst 600ms ease-out, ip-float 3s ease-in-out infinite;
+  filter: drop-shadow(0 4px 20px rgba(79, 124, 255, 0.5));
+}
+
+@keyframes ip-burst {
+  0% { transform: scale(0) rotate(-180deg); }
+  60% { transform: scale(1.2) rotate(10deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+
+@keyframes ip-float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+
+.ip-title {
+  font-size: 36px;
+  font-weight: 900;
+  margin: 0 0 8px;
+  background: linear-gradient(135deg, #ffffff 0%, #4f7cff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.5px;
+  text-shadow: 0 2px 20px rgba(79, 124, 255, 0.3);
+}
+
+.ip-subtitle {
+  font-size: 20px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+  margin: 0;
+}
+
+/* Featured Section (Invite Friends) */
+.ip-featured-section {
+  position: relative;
+  margin-bottom: 32px;
+}
+
+.ip-featured-badge {
+  display: inline-block;
+  background: linear-gradient(135deg, #ff6b35 0%, #ff8c42 100%);
+  color: white;
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  margin-bottom: 12px;
+  box-shadow: 0 4px 12px rgba(255, 107, 53, 0.4);
+  animation: ip-badge-pulse 2s ease-in-out infinite;
+}
+
+@keyframes ip-badge-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.ip-featured-card {
+  background: linear-gradient(135deg, rgba(79, 124, 255, 0.2), rgba(79, 124, 255, 0.1));
+  border: 2px solid rgba(79, 124, 255, 0.5);
+  border-radius: 20px;
+  padding: 28px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(79, 124, 255, 0.3);
+  transition: all 300ms ease;
+}
+
+.ip-featured-card::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    45deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.1) 50%,
+    transparent 70%
+  );
+  animation: ip-shine 3s linear infinite;
+}
+
+@keyframes ip-shine {
+  0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
+  100% { transform: translateX(100%) translateY(100%) rotate(45deg); }
+}
+
+.ip-featured-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(79, 124, 255, 0.7);
+  box-shadow: 0 12px 40px rgba(79, 124, 255, 0.4);
+}
+
+.ip-featured-icon {
+  font-size: 56px;
+  margin-bottom: 16px;
+  filter: drop-shadow(0 4px 12px rgba(79, 124, 255, 0.5));
+  animation: ip-featured-bounce 2s ease-in-out infinite;
+}
+
+@keyframes ip-featured-bounce {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-8px) scale(1.1); }
+}
+
+.ip-featured-title {
+  font-size: 24px;
+  font-weight: 800;
+  margin: 0 0 12px;
+  color: #ffffff;
+  text-shadow: 0 2px 8px rgba(79, 124, 255, 0.5);
+  position: relative;
+  z-index: 1;
+}
+
+.ip-featured-desc {
+  font-size: 15px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.9);
+  margin: 0 0 20px;
+  position: relative;
+  z-index: 1;
+}
+
+.ip-featured-highlight {
+  display: inline-block;
+  background: linear-gradient(135deg, rgba(255, 215, 0, 0.2), rgba(255, 165, 0, 0.2));
+  border: 2px solid rgba(255, 215, 0, 0.6);
+  border-radius: 12px;
+  padding: 12px 24px;
+  font-size: 16px;
+  color: #ffd700;
+  font-weight: 700;
+  box-shadow: 0 4px 16px rgba(255, 215, 0, 0.3);
+  position: relative;
+  z-index: 1;
+  animation: ip-highlight-glow 2s ease-in-out infinite;
+}
+
+@keyframes ip-highlight-glow {
+  0%, 100% { box-shadow: 0 4px 16px rgba(255, 215, 0, 0.3); }
+  50% { box-shadow: 0 4px 24px rgba(255, 215, 0, 0.5); }
+}
+
+/* Features Grid */
+.ip-features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.ip-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: linear-gradient(135deg, rgba(79, 124, 255, 0.08), rgba(79, 124, 255, 0.03));
+  border: 1px solid rgba(79, 124, 255, 0.2);
+  border-radius: 16px;
+  padding: 18px 20px;
+  transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ip-feature:hover {
+  background: linear-gradient(135deg, rgba(79, 124, 255, 0.15), rgba(79, 124, 255, 0.08));
+  border-color: rgba(79, 124, 255, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(79, 124, 255, 0.2);
+}
+
+.ip-feature-icon {
+  font-size: 32px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 8px rgba(79, 124, 255, 0.3));
+  animation: ip-icon-pop 400ms ease-out;
+}
+
+@keyframes ip-icon-pop {
+  0% { transform: scale(0); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+
+.ip-feature-content {
+  flex: 1;
+}
+
+.ip-feature-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0 0 4px;
+  color: white;
+}
+
+.ip-feature-desc {
+  font-size: 14px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.4;
+}
+
+/* Tagline Section */
+.ip-tagline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 20px;
+  margin-bottom: 28px;
+  background: linear-gradient(90deg, 
+    rgba(79, 124, 255, 0.1) 0%,
+    rgba(79, 124, 255, 0.15) 50%,
+    rgba(79, 124, 255, 0.1) 100%
+  );
+  border-radius: 12px;
+  border: 1px solid rgba(79, 124, 255, 0.25);
+}
+
+.ip-beam-icon {
+  font-size: 24px;
+  animation: ip-sparkle 2s ease-in-out infinite;
+}
+
+@keyframes ip-sparkle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.2); }
+}
+
+.ip-tagline p {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* CTA Button */
+.ip-cta {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #4f7cff 0%, #3d5fcf 100%);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 14px;
+  padding: 16px 24px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 8px 24px rgba(79, 124, 255, 0.4);
+  position: relative;
+  overflow: hidden;
+}
+
+.ip-cta::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, 
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.15) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: translateX(-100%);
+  transition: transform 600ms;
+}
+
+.ip-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(79, 124, 255, 0.6);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.ip-cta:hover::before {
+  transform: translateX(100%);
+}
+
+.ip-cta:active {
+  transform: translateY(0);
+}
+
+.ip-cta-main {
+  font-size: 18px;
+  color: white;
+  position: relative;
+  z-index: 1;
+}
+
+.ip-cta-sub {
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+  position: relative;
+  z-index: 1;
+}
+
+/* Close Button */
 .ip-close {
-  position: absolute; top: 8px; right: 10px;
-  background: transparent; color: #fff; border: none;
-  font-size: 22px; cursor: pointer; line-height: 1;
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  font-size: 24px;
+  cursor: pointer;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 200ms;
+  z-index: 10;
+}
+
+.ip-close:hover {
+  background: rgba(255, 80, 80, 0.8);
+  border-color: rgba(255, 80, 80, 1);
+  transform: rotate(90deg) scale(1.1);
+}
+
+/* Scrollbar styling */
+.ip-card::-webkit-scrollbar {
+  width: 8px;
+}
+
+.ip-card::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.ip-card::-webkit-scrollbar-thumb {
+  background: rgba(79, 124, 255, 0.5);
+  border-radius: 4px;
+}
+
+.ip-card::-webkit-scrollbar-thumb:hover {
+  background: rgba(79, 124, 255, 0.7);
 }

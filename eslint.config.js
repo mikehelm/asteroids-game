@@ -19,6 +19,8 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // Guard against missing identifiers (e.g., forgotten imports)
+      'no-undef': 'error',
       'react-refresh/only-export-components': [
         'warn',
         { allowConstantExport: true },

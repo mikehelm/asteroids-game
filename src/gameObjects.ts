@@ -1,5 +1,6 @@
 import { Player, Bullet, Asteroid, Vector2 } from './types';
-import { AlienShip, AlienBullet, Explosion, Bonus } from './types';
+import { getFxConfig } from './gameLoop/fxConfig';
+import { AlienShip, AlienBullet, Explosion, Bonus, Vector2 as V2 } from './types';
 import { 
   CANVAS_WIDTH, 
   CANVAS_HEIGHT, 
@@ -8,6 +9,7 @@ import {
   addVectors,
   multiplyVector
 } from './utils';
+import { applyVelocityCap, VELOCITY_CAPS } from './systems/velocityCap';
 
 export function createPlayer(): Player {
   return {
@@ -30,13 +32,113 @@ export function createPlayer(): Player {
     maxFuel: 100,
     fuelLowThreshold: 25,
     fuelCriticalThreshold: 10,
+    // Dash ability defaults
+    dashCooldown: 0,
+    dashActive: false,
+    dashDuration: 0,
+    dashDirection: undefined,
   };
 }
 
+export function createMotherShipExplosion(position: Vector2, env?: { refs?: any } | null): Explosion {
+  const particles = [] as Explosion['particles'];
+  const cfg = getFxConfig(env || undefined);
+  const liveExpl = (() => {
+    try {
+      const r = env?.refs;
+      const gs = r?.gameState || r?.gameStateRef?.current;
+      return Array.isArray(gs?.explosions) ? gs.explosions.length : 0;
+    } catch { return 0; }
+  })();
+  const pressure = liveExpl > 6 ? Math.max(0.4, 1 - (liveExpl - 6) * 0.1) : 1;
+  const base = 160 + Math.floor(Math.random() * 120);
+  const numParticles = Math.max(0, Math.floor(base * cfg.explosionSpawnScale * pressure));
+  for (let i = 0; i < numParticles; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    // Slower initial velocity for a heavy, lingering blast
+    const spd = 1.0 + Math.random() * 4.0;
+    const velocity = vectorFromAngle(ang, spd);
+    const t = Math.random();
+    let color: string;
+    let size: number;
+    let maxLife: number;
+    if (t < 0.35) {
+      color = Math.random() > 0.5 ? '#ff6600' : '#ffaa00';
+      size = 3 + Math.random() * 5;
+      maxLife = 150 + Math.floor(Math.random() * 120);
+    } else if (t < 0.7) {
+      color = Math.random() > 0.5 ? '#cccccc' : '#888888';
+      size = 4 + Math.random() * 6;
+      maxLife = 180 + Math.floor(Math.random() * 150);
+    } else {
+      color = Math.random() > 0.5 ? '#222222' : '#444444';
+      size = 2 + Math.random() * 3;
+      maxLife = 160 + Math.floor(Math.random() * 160);
+    }
+    particles.push({ position: { ...position }, velocity, life: 0, maxLife, size, color });
+  }
+  return { position: { ...position }, particles };
+}
+
+// Lightweight Super UFO explosion: compact dark->purple burst, no filters/shadows
+// kind: 'superUfoLite' so draw layer can render circles and a single ring cheaply
+export function createUfoSuperExplosionLight(position: V2, env?: { refs?: any } | null): Explosion {
+  const particles: Explosion['particles'] = [];
+  const cfg = getFxConfig(env || undefined);
+  // Bias to sparse shards (visual simplification)
+  const baseCount = 36;
+  const scaled = Math.floor(baseCount * (typeof cfg.explosionSpawnScale === 'number' ? cfg.explosionSpawnScale : 1));
+  let count = Math.max(30, Math.min(45, scaled));
+  // Enforce per-type cap for Super UFO explosion
+  const perTypeCap = (cfg as any).superUfoExplosionMaxParticles;
+  if (Number.isFinite(perTypeCap)) {
+    count = Math.min(count, perTypeCap as number);
+  }
+  // Even radial distribution with slight jitter
+  for (let i = 0; i < count; i++) {
+    const t = (i / Math.max(1, count)) * Math.PI * 2;
+    const jitter = (Math.random() - 0.5) * 0.2; // small angle jitter
+    const ang = t + jitter;
+    const speed = 2.0 + Math.random() * 2.0; // modest speeds
+    const vx = Math.cos(ang) * speed;
+    const vy = Math.sin(ang) * speed;
+    const life = 0;
+    const maxLife = 26 + Math.floor(Math.random() * 10);
+    const size = 2 + Math.random() * 2;
+    const palette = ['#000000', '#140014', '#2b0040', '#56009b'];
+    const color = palette[i % palette.length];
+    particles.push({ position: { ...position }, velocity: { x: vx, y: vy }, life, maxLife, size, color });
+  }
+
+  // SFX disabled temporarily while diagnosing stalls during Super UFO fights
+  // try {
+  //   const ss = (env as any)?.refs?.soundSystem;
+  //   const play = () => { try { ss?.playMissileExplosion?.(); } catch { /* no-op */ } };
+  //   play();
+  //   const d1 = 35 + Math.floor(Math.random() * 55);
+  //   const d2 = 80 + Math.floor(Math.random() * 70);
+  //   setTimeout(play, d1);
+  //   setTimeout(play, d2);
+  // } catch { /* no-op */ }
+
+  return { position: { ...position }, particles, kind: 'superUfoLite' } as Explosion;
+}
+
 // Small black/gray puff used for asteroid-asteroid bumps (no damage)
-export function createBlackPuffExplosion(position: Vector2, intensity: number = 8): Explosion {
+export function createBlackPuffExplosion(position: Vector2, intensity: number = 8, env?: { refs?: any } | null): Explosion {
   const particles = [];
-  const numParticles = intensity + Math.floor(Math.random() * 4); // 8-11 particles by default
+  const cfg = getFxConfig(env || undefined);
+  // Soft spawn pressure: scale by live explosion count (>6 -> down to 40% min)
+  const liveExpl = (() => {
+    try {
+      const r = env?.refs;
+      const gs = r?.gameState || r?.gameStateRef?.current;
+      return Array.isArray(gs?.explosions) ? gs.explosions.length : 0;
+    } catch { return 0; }
+  })();
+  const pressure = liveExpl > 6 ? Math.max(0.4, 1 - (liveExpl - 6) * 0.1) : 1;
+  const scaled = Math.max(0, Math.floor((intensity + Math.floor(Math.random() * 4)) * cfg.explosionSpawnScale * pressure));
+  const numParticles = scaled; // small effect; defaults keep visuals identical
 
   for (let i = 0; i < numParticles; i++) {
     const angle = Math.random() * Math.PI * 2;
@@ -54,10 +156,15 @@ export function createBlackPuffExplosion(position: Vector2, intensity: number = 
     });
   }
 
-  return {
+  const out = {
     position: { ...position },
     particles,
   };
+  // Per-explosion cap (no global pool available); defaults preserve visuals
+  if (out.particles.length > cfg.explosionMaxParticles) {
+    out.particles.length = cfg.explosionMaxParticles;
+  }
+  return out;
 }
 
 export function createBullet(position: Vector2, angle: number): Bullet {
@@ -132,7 +239,7 @@ export function createAsteroid(size: 'large' | 'medium' | 'small', position?: Ve
 
   const radius = size === 'large' ? 40 : size === 'medium' ? 25 : 15;
   const mass = size === 'large' ? 20 : size === 'medium' ? 10 : 5;
-  const health = size === 'large' ? 3 : size === 'medium' ? 2 : 1;
+  const health = (size === 'large' ? 3 : size === 'medium' ? 2 : 1) * 2;
 
   // Random rotation speed for each asteroid
   const rotationSpeed = (Math.random() - 0.5) * 0.02; // -0.01 to +0.01 radians per frame
@@ -154,7 +261,7 @@ export function createAsteroid(size: 'large' | 'medium' | 'small', position?: Ve
   };
 }
 
-export function updatePlayer(player: Player, keys: { [key: string]: boolean }, _deltaTime: number): Player {
+export function updatePlayer(player: Player, keys: { [key: string]: boolean }, _deltaTime: number, reversedControls = false): Player {
   void _deltaTime;
   const updated = { ...player };
 
@@ -171,17 +278,49 @@ export function updatePlayer(player: Player, keys: { [key: string]: boolean }, _
       updated.doubleShooterStacks = 0;
     }
   }
-
-  // Rotation
-  if (keys['ArrowLeft'] || keys['a'] || keys['A']) {
-    updated.rotation -= 0.1;
+  
+  // Update dash cooldown
+  if (updated.dashCooldown && updated.dashCooldown > 0) {
+    updated.dashCooldown--;
   }
-  if (keys['ArrowRight'] || keys['d'] || keys['D']) {
-    updated.rotation += 0.1;
+  
+  // Update dash duration
+  if (updated.dashDuration && updated.dashDuration > 0) {
+    updated.dashDuration--;
+    if (updated.dashDuration === 0) {
+      updated.dashActive = false;
+      updated.dashDirection = undefined;
+    }
   }
 
-  // Thrust with fuel consumption
-  if (keys['ArrowUp'] || keys['w'] || keys['W']) {
+  // Rotation (reversed if controls are scrambled)
+  const leftKeys = keys['ArrowLeft'] || keys['a'] || keys['A'];
+  const rightKeys = keys['ArrowRight'] || keys['d'] || keys['D'];
+  
+  if (reversedControls) {
+    // Reversed: left rotates right, right rotates left
+    if (leftKeys) {
+      updated.rotation += 0.1;
+    }
+    if (rightKeys) {
+      updated.rotation -= 0.1;
+    }
+  } else {
+    // Normal controls
+    if (leftKeys) {
+      updated.rotation -= 0.1;
+    }
+    if (rightKeys) {
+      updated.rotation += 0.1;
+    }
+  }
+
+  // Thrust with fuel consumption (reversed if controls are scrambled)
+  const upKeys = keys['ArrowUp'] || keys['w'] || keys['W'];
+  const downKeys = keys['ArrowDown'] || keys['s'] || keys['S'];
+  const shouldThrust = reversedControls ? downKeys : upKeys;
+  
+  if (shouldThrust) {
     const hasFuel = (updated.fuel ?? 0) > 0;
     if (hasFuel) {
       updated.thrust = 0.3;
@@ -205,12 +344,9 @@ export function updatePlayer(player: Player, keys: { [key: string]: boolean }, _
     updated.velocity = multiplyVector(updated.velocity, 0.98);
   }
 
-  // Limit speed (reduced when double shooter is active)
-  const currentMaxSpeed = updated.doubleShooter > 0 ? updated.maxSpeed * 0.5 : updated.maxSpeed;
-  const speed = Math.sqrt(updated.velocity.x ** 2 + updated.velocity.y ** 2);
-  if (speed > currentMaxSpeed) {
-    updated.velocity = multiplyVector(updated.velocity, currentMaxSpeed / speed);
-  }
+  // Apply velocity cap system (allows temporary overspeed with delayed deceleration)
+  const capSpeed = updated.doubleShooter > 0 ? VELOCITY_CAPS.PLAYER_DOUBLE_SHOOTER : VELOCITY_CAPS.PLAYER_NORMAL;
+  applyVelocityCap(updated as any, { capSpeed, delayMs: 2000, decelerationMs: 5000 }, performance.now());
 
   // Update position
   updated.position = addVectors(updated.position, updated.velocity);
@@ -230,7 +366,16 @@ export function updateBullet(bullet: Bullet): Bullet {
 export function updateAsteroid(asteroid: Asteroid): Asteroid {
   const updated = { ...asteroid };
   
-  // Asteroids move in straight lines at constant velocity
+  // Apply velocity cap based on asteroid size
+  let capSpeed = VELOCITY_CAPS.ASTEROID_MEDIUM;
+  if (asteroid.special) capSpeed = VELOCITY_CAPS.ASTEROID_SPECIAL;
+  else if (asteroid.radius >= 50) capSpeed = VELOCITY_CAPS.ASTEROID_LARGE;
+  else if (asteroid.radius >= 25) capSpeed = VELOCITY_CAPS.ASTEROID_MEDIUM;
+  else if (asteroid.radius >= 12) capSpeed = VELOCITY_CAPS.ASTEROID_SMALL;
+  else capSpeed = VELOCITY_CAPS.ASTEROID_TINY;
+  
+  applyVelocityCap(updated as any, { capSpeed, delayMs: 2000, decelerationMs: 5000 }, performance.now());
+  
   updated.position = addVectors(updated.position, updated.velocity);
   updated.position = wrapPosition(updated.position);
   
@@ -327,6 +472,78 @@ export function createAlienShip(
   };
 
   return alienShip;
+}
+
+export function createScienceVessel(
+  targetAsteroid: Asteroid | null,
+  role: 'primary' | 'secondary' = 'primary',
+  difficulty: number = 1
+): AlienShip {
+  // Determine which side the target asteroid is on, then spawn from opposite side
+  let edge: number;
+  
+  if (targetAsteroid) {
+    const centerX = CANVAS_WIDTH / 2;
+    const centerY = CANVAS_HEIGHT / 2;
+    const dx = targetAsteroid.position.x - centerX;
+    const dy = targetAsteroid.position.y - centerY;
+    
+    // Determine which quadrant the asteroid is in
+    if (Math.abs(dx) > Math.abs(dy)) {
+      // Asteroid is more left/right
+      edge = dx > 0 ? 3 : 1; // If asteroid is right, spawn left (3), vice versa
+    } else {
+      // Asteroid is more top/bottom
+      edge = dy > 0 ? 0 : 2; // If asteroid is bottom, spawn top (0), vice versa
+    }
+  } else {
+    // Fallback: random edge if no target
+    edge = Math.floor(Math.random() * 4);
+  }
+  
+  let position: Vector2;
+  
+  switch (edge) {
+    case 0: // Top
+      position = { x: Math.random() * CANVAS_WIDTH, y: -50 };
+      break;
+    case 1: // Right
+      position = { x: CANVAS_WIDTH + 50, y: Math.random() * CANVAS_HEIGHT };
+      break;
+    case 2: // Bottom
+      position = { x: Math.random() * CANVAS_WIDTH, y: CANVAS_HEIGHT + 50 };
+      break;
+    default: // Left
+      position = { x: -50, y: Math.random() * CANVAS_HEIGHT };
+      break;
+  }
+
+  // Science vessels are slower and tankier than combat UFOs
+  const baseSpeed = 1.0; // 60% of normal UFO speed
+  
+  const scienceVessel: AlienShip = {
+    position,
+    velocity: { x: 0, y: 0 },
+    rotation: 0,
+    radius: 18, // Slightly larger than regular UFOs
+    health: 5 + difficulty, // Tankier than regular UFOs
+    maxHealth: 5 + difficulty,
+    speed: baseSpeed + (difficulty * 0.2),
+    fireRate: 999999, // Never fires (doesn't shoot)
+    lastShot: 0,
+    targetAngle: 0,
+    difficulty,
+    shotCount: 0,
+    // Science vessel specific
+    isScienceVessel: true,
+    scienceRole: role,
+    scienceState: role === 'primary' ? 'approaching' : 'patrolling',
+    scienceTargetAsteroid: targetAsteroid,
+    scienceDockProgress: 0,
+    scienceStealAttempted: false,
+  };
+
+  return scienceVessel;
 }
 
 export function createAlienBullet(position: Vector2, angle: number): AlienBullet {
@@ -497,9 +714,20 @@ export function updateAlienBullet(bullet: AlienBullet): AlienBullet {
   return updated;
 }
 
-export function createExplosion(position: Vector2): Explosion {
+export function createExplosion(position: Vector2, env?: { refs?: any } | null): Explosion {
   const particles = [];
-  const numParticles = 15 + Math.floor(Math.random() * 10); // 15-25 particles
+  const cfg = getFxConfig(env || undefined);
+  // Soft spawn pressure based on live explosions (>6): never below 40%
+  const liveExpl = (() => {
+    try {
+      const r = env?.refs;
+      const gs = r?.gameState || r?.gameStateRef?.current;
+      return Array.isArray(gs?.explosions) ? gs.explosions.length : 0;
+    } catch { return 0; }
+  })();
+  const pressure = liveExpl > 6 ? Math.max(0.4, 1 - (liveExpl - 6) * 0.1) : 1;
+  const base = 15 + Math.floor(Math.random() * 10); // 15-25 particles
+  const numParticles = Math.max(0, Math.floor(base * cfg.explosionSpawnScale * pressure));
   
   for (let i = 0; i < numParticles; i++) {
     const angle = (Math.PI * 2 * i) / numParticles + (Math.random() - 0.5) * 0.5;
@@ -522,9 +750,20 @@ export function createExplosion(position: Vector2): Explosion {
   };
 }
 
-export function createAlienExplosion(position: Vector2): Explosion {
+export function createAlienExplosion(position: Vector2, env?: { refs?: any } | null): Explosion {
   const particles = [];
-  const numParticles = 75 + Math.floor(Math.random() * 50); // 75-125 particles (5x more)
+  const cfg = getFxConfig(env || undefined);
+  // Soft spawn pressure based on live explosions (>6): never below 40%
+  const liveExpl = (() => {
+    try {
+      const r = env?.refs;
+      const gs = r?.gameState || r?.gameStateRef?.current;
+      return Array.isArray(gs?.explosions) ? gs.explosions.length : 0;
+    } catch { return 0; }
+  })();
+  const pressure = liveExpl > 6 ? Math.max(0.4, 1 - (liveExpl - 6) * 0.1) : 1;
+  const base = 75 + Math.floor(Math.random() * 50); // 75-125 particles (5x more)
+  const numParticles = Math.max(0, Math.floor(base * cfg.explosionSpawnScale * pressure));
   
   for (let i = 0; i < numParticles; i++) {
     const angle = Math.random() * 2 * Math.PI; // Random directions
@@ -569,13 +808,13 @@ export function createAlienExplosion(position: Vector2): Explosion {
 }
 
 export function createBonus(): Bonus {
-  // Random bonus type (equal chance for all three types)
+  // Random bonus type (weighted distribution)
   const rand = Math.random();
-  // Weighted: 35% doubleShooter, 25% shield, 25% heal, 15% missile
+  // Weighted: 30% doubleShooter, 25% shield, 10% heal, 35% missile
   let bonusType: 'shield' | 'heal' | 'doubleShooter' | 'missile';
-  if (rand < 0.35) bonusType = 'doubleShooter';
-  else if (rand < 0.60) bonusType = 'shield';
-  else if (rand < 0.85) bonusType = 'heal';
+  if (rand < 0.30) bonusType = 'doubleShooter';
+  else if (rand < 0.55) bonusType = 'shield';
+  else if (rand < 0.65) bonusType = 'heal';
   else bonusType = 'missile';
   
   // Spawn from random edge of screen

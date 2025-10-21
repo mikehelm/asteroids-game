@@ -1,8 +1,13 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo, useLayoutEffect } from 'react';
 import { startGridScan, advanceGridScanDt, advanceGridRetractDt, isGridComplete } from './tractorBeam/state';
 import { beamUi } from './config/beamUi';
 import mwcLogo from '../images/Made With Chat Logo.png';
-import { GameState, Player, Bullet, AlienShip, AlienBullet, Explosion, Bonus, Asteroid, VisualDebris, PlayerMissileExt } from './types';
+import { YouTubeCredit } from './components/YouTubeCredit';
+import { YouTubeQuotaDisplay } from './components/YouTubeQuotaDisplay';
+import { VirtualJoystick } from './components/VirtualJoystick';
+import { TouchControls } from './components/TouchControls';
+import type { YouTubeVideo, YouTubeChannel, MusicSource } from './youtube/types';
+import { GameState, AlienShip, AlienBullet, Explosion, Asteroid, VisualDebris } from './types';
 import { createPlayer } from './gameObjects';
 import { soundSystem } from './sounds';
 import { 
@@ -17,74 +22,85 @@ import {
   addVectors,
   multiplyVector
 } from './utils';
+import { triggerScreenShake, updateScreenShake, getShakeIntensityForSize } from './utils/screenShake';
 import {
   createBullet,
   createAlienShip,
+  createScienceVessel,
   createAlienBullet,
-  updatePlayer,
-  updateBullet,
-  updateAlienShip,
-  updateAlienBullet,
   updateAsteroid,
   splitAsteroid,
-  createAsteroid,
   createExplosion,
   updateExplosion,
   createAlienExplosion,
+  createMotherShipExplosion,
+  createUfoSuperExplosionLight,
   createBonus,
-  updateBonus,
   createBlackPuffExplosion,
 } from './gameObjects';
+import { LASER_HIT_DAMAGE, MISSILE_HIT_DAMAGE } from './gameLoop/constants';
 import { ExplosionDistortionManager } from './effects/ExplosionDistortion';
+import { applyVelocityCap, VELOCITY_CAPS } from './systems/velocityCap';
 import TitleBanner from './ui/TitleBanner';
 import MusicDock from './ui/MusicDock';
 import InfoPopup from './ui/InfoPopup';
-import DebugPanel from './ui/DebugPanel';
+import BackgroundDropdown from './ui/BackgroundDropdown';
+import { saveResumeInfo, installMusicResumePersistence } from './ui/persistence';
+import { saveFxPreset, loadFxPreset, clearFxPreset, loadFxCap, clearFxCap } from './ui/fxPersistence';
+import { applyFxPreset } from './gameLoop/fxPresets';
+import { getFxConfig, FX_DEFAULTS } from './gameLoop/fxConfig';
+import { DEV_MODE, logDevBanner, log, logOnce, logThrottle, devFrameError } from './dev/logger';
+import { installDevHotkeys } from './dev/hotkeys';
+import { useRenderClock, freezeRenderClockOnPause } from './gameLoop/pauseClock';
+import { createInputHandlers } from './gameLoop/inputHandlers';
+import { createMusicControls } from './ui/musicControls';
 import { emitUiEvent } from './events';
 import {
   initTractorBeamState,
-  renderTractorOverlay,
-  renderFlipit,
 } from './tractorBeam';
-import { DEV_SUMMARY_FRAMES, DEBUG_PANEL_MAX, DEFAULT_BG_BRIGHTNESS } from './constants';
+import { applyFitSizing, toggleFitToWindow } from './ui/canvasSizing';
+import { regenerateStars, ensureStarsForCanvas } from './gameLoop/starfield';
+import { formatTrackName } from './ui/musicUtils';
+import { Scoreboard, ScoreboardDisplay, getCurrentUser } from './components/Scoreboard';
+import { saveScore, resetCurrentGameTickets, getCurrentGameTickets } from './components/Scoreboard/storage';
+import { TicketRandomizer } from './components/TicketRandomizer';
+import { LoginModal } from './components/Auth';
+import { panFromX } from './ui/audioUtils';
+import { enqueueTitle, shouldSuppress, seenRecently } from './ui/titleOverlays';
 import { update as updateFrame } from './gameLoop/update';
-import {
-  draw as drawFrame,
-  drawBackground,
-  drawStars,
-  drawDebris as drawDebrisMod,
-  drawExplosions as drawExplosionsMod,
-  drawPlayer as drawPlayerMod,
-  drawAsteroids as drawAsteroidsMod,
-  drawAliens as drawAliensMod,
-  drawBullets as drawBulletsMod,
-  drawBonuses as drawBonusesMod,
-  drawAlienBullets as drawAlienBulletsMod,
-  drawPlayerMissiles as drawPlayerMissilesMod,
-  drawTractorOverlay,
-  drawHUD,
-} from './gameLoop/draw';
+import { createRefuelStation, createRewardShip, devLogSpawns } from './gameLoop/worldTargets';
+import { initGame as initGameMod } from './gameLoop/initGame';
+import { spawnImpactDebris, chooseAsteroidDebrisPalette, markArtifactEdgeGlow } from './gameLoop/debris';
+import { createStageAsteroids } from './gameLoop/staging';
+import { drawBackground } from './gameLoop/drawLayers/drawBackground';
+import { drawShield } from './gameLoop/drawLayers/drawShield';
+import { drawAsteroidScanGrid } from './gameLoop/drawLayers/drawAsteroidScanGrid';
+import { WORLD_GRID_SIZE, DEFAULT_BG_BRIGHTNESS, DEV_SUMMARY_FRAMES } from './gameLoop/constants';
+import { WORLD_MIN_TILE, WORLD_MAX_TILE } from './constants';
+// (duplicate import removed)
+  import {
+    draw as drawFrame,
+    drawStars,
+    drawDebris as drawDebrisMod,
+    drawExplosions as drawExplosionsMod,
+    drawPlayer as drawPlayerMod,
+    drawSpecialAsteroids as drawSpecialAsteroidsMod,
+    drawNormalAsteroids as drawNormalAsteroidsMod,
+    drawAliens as drawAliensMod,
+    drawBullets as drawBulletsMod,
+    drawBonuses as drawBonusesMod,
+    drawAlienBullets as drawAlienBulletsMod,
+    drawPlayerMissiles as drawPlayerMissilesMod,
+    drawTractorOverlay,
+    drawHUD,
+    drawMiniMap,
+    drawObjectives,
+    withPlayerDockingXform,
+  } from './gameLoop/draw';
 
-// ===== Lightweight Dev Logger (env-guarded) =====
-type NodeProc = { env?: { GAME_MODE?: string } };
-const nodeGameMode: string | undefined =
-  ('process' in globalThis ? (globalThis as unknown as { process?: NodeProc }).process?.env?.GAME_MODE : undefined);
-
-const __DEV_MODE__ =
-  ((import.meta.env?.VITE_ENV as string | undefined) ?? 'local') !== 'prod' &&
-  nodeGameMode !== 'production';
-
+if (DEV_MODE) { logDevBanner(); }
 let __frameCounter = 0;
-
-if (__DEV_MODE__) {
-  // Should print once on reload if dev mode is ON
-  // (VITE_ENV and GAME_MODE resolved at build/runtime)
-  // If you don't see this in DevTools Console, the guard is false.
-  console.log('Dev logger active', {
-    VITE_ENV: import.meta.env?.VITE_ENV,
-    GAME_MODE: nodeGameMode,
-  });
-}
+const __DEV_MODE__ = DEV_MODE;
 // ===============================================
 
 // Local narrow helper types moved to src/types.ts (PlayerMissileExt)
@@ -109,34 +125,51 @@ const Game: React.FC = () => {
   const initialStarCountRef = useRef<number>(200);
   // Dev: in-app debug lines buffer (env-gated usage)
   const debugLinesRef = useRef<string[]>([]);
+  // Render clock refs (initialized with performance.now())
+  const { bootStartRef, lastFrameNowRef } = useRenderClock({});
+  // Dev-tunable FX config (refs.fxConfig). Defaults preserve visuals if unset.
+  const fxConfigRef = useRef<any>(null);
+  // Stable holder used by DEV preset buttons so we can mutate refs.fxConfig at runtime
+  const devFxRefs = useRef<{ fxConfig?: any }>({ fxConfig: fxConfigRef.current });
+  // Soft FPS cap helper
+  const lastProcessedRef = useRef<number>(0);
+  // Dev UI nudge removed - no longer needed
 
-  const regenerateStars = useCallback((count: number) => {
-    const arr: Array<{x:number;y:number;brightness:number;twinkleSpeed:number}> = [];
-    for (let i = 0; i < count; i++) {
-      arr.push({
-        x: Math.random() * CANVAS_WIDTH,
-        y: Math.random() * CANVAS_HEIGHT,
-        brightness: 0.3 + Math.random() * 0.7,
-        twinkleSpeed: 0.02 + Math.random() * 0.03,
-      });
-      }
-    starsRef.current = arr;
-  }, []);
-
-  const ensureStarsForCanvas = useCallback(() => {
-    const area = CANVAS_WIDTH * CANVAS_HEIGHT;
-    const ratio = Math.max(0.25, area / Math.max(1, initialAreaRef.current));
-    const target = Math.max(150, Math.round(initialStarCountRef.current * ratio));
-    if (Math.abs((starsRef.current?.length || 0) - target) > Math.max(25, target * 0.15)) {
-      regenerateStars(target);
-    }
-  }, [regenerateStars]);
+  // Starfield helpers imported; call ensureStarsForCanvas with deps where needed
   // Backdrops and current index
   const [backdrops, setBackdrops] = useState<string[]>([]);
   const [backdropIndex, setBackdropIndex] = useState<number>(0);
   const musicAutoStartedRef = useRef<boolean>(false);
   const armNextTrackOnShotRef = useRef<boolean>(false);
   const baseCanvasRef = useRef<{w: number, h: number}>({ w: CANVAS_WIDTH, h: CANVAS_HEIGHT });
+  // Helper: directly set the canvas pixel size and remember base dims
+  const setCanvasPixelSize = useCallback((s: { w: number; h: number }) => {
+    const c = canvasRef.current;
+    if (c) {
+      const w = Math.max(1, Math.floor(s.w));
+      const h = Math.max(1, Math.floor(s.h));
+      c.width = w;
+      c.height = h;
+      c.style.width = `${w}px`;
+      c.style.height = `${h}px`;
+    }
+    baseCanvasRef.current = { w: s.w, h: s.h };
+    try { setCanvasDims({ w: s.w, h: s.h }); } catch { /* State update can fail, ignore */ }
+  }, []);
+
+
+  // Fit helper: ensure stars density matches current canvas size
+  const ensureStarsWrapper = useCallback(() => {
+    try {
+      ensureStarsForCanvas({
+        starsRef,
+        initialAreaRef,
+        initialStarCountRef,
+        CANVAS_WIDTH,
+        CANVAS_HEIGHT,
+      });
+    } catch { /* Ignore star generation errors */ }
+  }, []);
   const bgImageRef = useRef<HTMLImageElement | null>(null);
   // Warp particle system (for immersive fly-through effect)
   const warpParticlesRef = useRef<Array<{ x: number; y: number; vx: number; vy: number; life: number; maxLife: number; prevX: number; prevY: number }>>([]);
@@ -147,10 +180,9 @@ const Game: React.FC = () => {
   const INTRO_ZOOM_DUR_MS = 2000; // ease out over 2s
   const introZoomStartRef = useRef<number>(performance.now());
   const bgZoomExtraRef = useRef<number>(0); // clamp-only extra beyond intro
-  // Background tuning controls (defaults updated per user: opacity 25%, contrast 100%, brightness 40%)
-  const [bgOpacity, setBgOpacity] = useState(0.25);
-  const [bgContrast, setBgContrast] = useState(1.0);
-  const [bgBrightness, setBgBrightness] = useState(0.4);
+  // Background tuning controls (defaults updated per user: opacity 50%, brightness 50%)
+  const [bgOpacity, setBgOpacity] = useState(0.5);
+  const [bgBrightness, setBgBrightness] = useState(0.5);
   const [bgToolsOpen, setBgToolsOpen] = useState(false);
   // Effects selection: choose which groups are affected by the Effects sliders
   const [effectsApply, setEffectsApply] = useState({
@@ -161,10 +193,10 @@ const Game: React.FC = () => {
   });
   // Motion trails control (frame accumulation fade)
   const [trailsEnabled, setTrailsEnabled] = useState<boolean>(true);
-  // Strength is the per-frame fade amount. 0.08 = subtle (long tail), 0.25 = capped strong
-  const [trailsStrength, setTrailsStrength] = useState<number>(0.20);
+  // Strength is fixed at 0.20 (0.08 = subtle, 0.25 = capped strong)
+  const trailsStrength = 0.20;
   // Performance mode default ON per user: reduces expensive effects during heavy scenes
-  const [perfMode, setPerfMode] = useState<boolean>(true);
+  const [perfMode] = useState<boolean>(true);
   // Per-item selection (scaffolding for per-item buffers)
   const [trailsTargets, setTrailsTargets] = useState<{ player: boolean; ufos: boolean; asteroids: boolean }>({
     player: true,
@@ -173,7 +205,7 @@ const Game: React.FC = () => {
   });
   // Refs mirrored for use inside animation loop
   const bgOpacityRef = useRef(bgOpacity);
-  const bgContrastRef = useRef(bgContrast);
+  const bgContrastRef = useRef(1.0); // Fixed at 100%
   const bgBrightnessRef = useRef(bgBrightness);
   const effectsApplyRef = useRef(effectsApply);
   const trailsEnabledRef = useRef(trailsEnabled);
@@ -194,16 +226,68 @@ const Game: React.FC = () => {
   const prevStageRef = useRef<number>(1);
   const prevAlienCountRef = useRef<number>(0);
   
+  // Auto-destruction sequence for final small asteroids
+  const autoDestructionActiveRef = useRef<boolean>(false);
+  const autoDestructionStartRef = useRef<number>(0);
+  const autoDestructionInitialCountRef = useRef<number>(0);
+  const autoDestructionNextDelayRef = useRef<number>(0); // Delay until next explosion (ms)
+  const autoDestructionScoreRandomizerShownRef = useRef<boolean>(false); // Track if score-based randomizer shown
+  const autoDestructionBonusRandomizerPendingRef = useRef<boolean>(false); // Track if bonus randomizer needs to show
+  const autoDestructionScoreRef = useRef<number>(0); // Track score for bonus calculation
+  const gameOverPendingRef = useRef<boolean>(false); // Track if game over should trigger after auto-destruction
+  
+  // Science vessel thief tracking
+  const scienceVesselsToSpawnRef = useRef<number>(0); // How many science vessels should spawn this stage
+  const scienceVesselsSpawnedRef = useRef<number>(0); // How many have spawned so far this stage
+  const firstScienceVesselTimeRef = useRef<number>(0); // Random spawn time for first vessel
+  const scienceVesselAlertShownRef = useRef<boolean>(false); // Track if alert was shown
+  const reversedControlsUntilRef = useRef<number>(0); // Timestamp until controls are reversed
+  const bubbleEffectUntilRef = useRef<number>(0); // Timestamp until bubble effect is shown
+  
+  // Double-tap detection for dash ability
+  const lastKeyPressTimeRef = useRef<{ [key: string]: number }>({});
+  const rotationBeforeFirstPressRef = useRef<{ [key: string]: number }>({});
+  const DOUBLE_TAP_WINDOW_MS = 220; // 220ms window to detect double-tap (reduced from 300ms for less sensitivity)
+  
+  // Screen shake system for juice
+  const screenShakeRef = useRef<{ x: number; y: number; intensity: number; duration: number }>({ x: 0, y: 0, intensity: 0, duration: 0 });
+  const screenShakeStartRef = useRef<number>(0);
+  
+  // Combo system for score multipliers
+  const comboCountRef = useRef<number>(0);
+  const lastKillTimeRef = useRef<number>(0);
+  const comboTimeoutMs = 3000; // 3 seconds to keep combo alive
+  const [, setComboMultiplier] = useState<number>(1);
+  const [comboDisplay, setComboDisplay] = useState<{ count: number; multiplier: number; showUntil: number } | null>(null);
+  
+  // Game stats tracking removed - no longer used
   
   // InfoPopup state and pause behavior
   const [infoOpen, setInfoOpen] = useState(false);
   const uiPausedRef = useRef(false);
   const gameStartTimeRef = useRef<number>(0);
   const autoPopupShownRef = useRef(false);
+  // DEV console buffer state (DEV-only rendering)
+  const [devMax, setDevMax] = useState<boolean>(false);
+  const [showStats] = useState(false); // Legacy - no longer shown but referenced
+  const devLines: string[] = []; // Dev lines buffer
+  
+  // First-time reward notifications
+  const seenRewardsRef = useRef<Set<string>>(new Set());
+  const [rewardNotifications, setRewardNotifications] = useState<Array<{
+    id: number;
+    text: string;
+    x: number;
+    y: number;
+    startTime: number;
+    duration: number;
+  }>>([]);
 
   // Link infoOpen to UI pause (render still continues)
   useEffect(() => {
     uiPausedRef.current = infoOpen;
+    // Auto-pause game when InfoPopup is open
+    setIsPaused(infoOpen);
   }, [infoOpen]);
 
   // Persist "shown once per session" in sessionStorage to avoid re-showing on music changes or restarts
@@ -214,6 +298,32 @@ const Game: React.FC = () => {
     } catch {}
   }, []);
 
+  // Auto-fit canvas to window on mount and on resize before first paint
+  useLayoutEffect(() => {
+    const deps = {
+      initialCanvasRef: baseCanvasRef,
+      ensureStarsForCanvas: ensureStarsWrapper,
+      setCanvasSize,
+      setCanvasPixelSize,
+      setIsFitted: (_b: boolean) => { /* no-op here; UI toggle can provide its own */ },
+      renderScale: 1,
+    } as const;
+    // Initial fit
+    applyFitSizing(deps);
+    // Initialize game immediately after sizing to ensure globals and canvas match
+    if (!bootInitDoneRef.current) {
+      bootInitDoneRef.current = true;
+      initGame();
+      try { logOnce('init:game:mount', '[init:game]', { reason: 'layout-fit' }); } catch {}
+    }
+    // Resize listener
+    const onResize = () => {
+      applyFitSizing(deps);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [ensureStarsWrapper, setCanvasPixelSize]);
+
   // When the popup opens (either auto or manual), mark as shown for this session
   useEffect(() => {
     if (infoOpen) {
@@ -223,7 +333,6 @@ const Game: React.FC = () => {
   }, [infoOpen]);
   
   useEffect(() => { bgOpacityRef.current = bgOpacity; }, [bgOpacity]);
-  useEffect(() => { bgContrastRef.current = bgContrast; }, [bgContrast]);
   useEffect(() => { bgBrightnessRef.current = bgBrightness; }, [bgBrightness]);
   useEffect(() => { effectsApplyRef.current = effectsApply; }, [effectsApply]);
   // Init distortion manager once
@@ -236,13 +345,14 @@ const Game: React.FC = () => {
     }
   }, []);
   useEffect(() => { trailsEnabledRef.current = trailsEnabled; }, [trailsEnabled]);
-  useEffect(() => { trailsStrengthRef.current = trailsStrength; }, [trailsStrength]);
   useEffect(() => { trailsTargetsRef.current = trailsTargets; }, [trailsTargets]);
   useEffect(() => { perfModeRef.current = perfMode; }, [perfMode]);
   useEffect(() => { uiPausedRef.current = infoOpen; }, [infoOpen]);
   // Local state for current canvas dimensions (do NOT shadow utils.setCanvasSize)
   const [canvasSize, setCanvasDims] = useState<{w: number, h: number}>({ w: CANVAS_WIDTH, h: CANVAS_HEIGHT });
   const [isFitted, setIsFitted] = useState(false);
+  const isFittedRef = useRef(isFitted);
+  useEffect(() => { isFittedRef.current = isFitted; }, [isFitted]);
   // Remember initial canvas size to restore "Original Size"
   const initialCanvasRef = useRef<{ w: number; h: number }>({ w: CANVAS_WIDTH, h: CANVAS_HEIGHT });
   const [, setScore] = useState(0);
@@ -280,6 +390,7 @@ const Game: React.FC = () => {
     originalAsteroidVelocity: { x: number; y: number } | null;
     postPushSpinVel?: number;
     postPushSpinUntil?: number;
+    postPushVelocity?: { x: number; y: number };
     forceFieldUntil?: number;
     skippedLockMs?: number;
     // Gravity and escape window
@@ -338,6 +449,18 @@ const Game: React.FC = () => {
   const [isMuted, setIsMuted] = useState(false);
   const isMutedRef = useRef(isMuted);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  
+  // Auto-fire feature (on by default)
+  const [autoFireEnabled, setAutoFireEnabled] = useState(true);
+  const autoFireEnabledRef = useRef(autoFireEnabled);
+  useEffect(() => { autoFireEnabledRef.current = autoFireEnabled; }, [autoFireEnabled]);
+  const lastAutoFireRef = useRef<number>(0);
+  
+  // Mobile/touch controls
+  const [isMobile] = useState(() => /iPhone|iPad|iPod|Android/i.test(navigator.userAgent));
+  const touchRotationRef = useRef<number | null>(null);
+  const touchThrustRef = useRef<number>(0);
+  const touchFireActiveRef = useRef<boolean>(false);
   const [musicTracks, setMusicTracks] = useState<Array<{ name: string; url: string }>>([]);
   const [musicIndex, setMusicIndex] = useState(0);
   const [musicPlaying, setMusicPlaying] = useState(false);
@@ -348,26 +471,23 @@ const Game: React.FC = () => {
   const [musicUserPaused, setMusicUserPaused] = useState(false);
   const musicUserPausedRef = useRef(musicUserPaused);
   useEffect(() => { musicUserPausedRef.current = musicUserPaused; }, [musicUserPaused]);
+  // Centralized music controls (volume-only mute, safePlay, prev/next, etc.)
+  const controls = useMemo(() => createMusicControls({
+    soundSystem,
+    isMutedRef,
+    setIsMuted,
+    musicVolState: [musicVol, setMusicVol],
+    sfxVolState: [sfxVol, setSfxVol],
+    musicUserPausedRef,
+    setMusicPlaying,
+    setMusicUserPaused,
+    setMusicIndex,
+  }), [musicVol, sfxVol]);
+  // Music persistence key and in-memory resume storage
+  // Boot initialization gate
+  const bootInitDoneRef = useRef(false);
   // Music resume persistence
   const MUSIC_RESUME_KEY = 'flipit_music_resume_v1';
-  // Gravity well & tractor-beam encounter tuning
-  const GRAV_WELL_RADIUS_BASE = 120;            // + asteroid.radius for capture radius
-  const GRAV_WELL_STRENGTH   = 0.00012;         // tuned accel, clamped
-  const GRAV_WELL_MAX_ACCEL  = 0.035;           // safety cap (pixels/ms^2)
-  const ESCAPE_SPEED_THRESH  = 0.55;            // speed to ignore capture
-  const FIGHT_WINDOW_MS      = 1800;            // time to “fight” gravity
-  const FIGHT_ESCAPE_PROB    = 0.5;             // 50% chance to allow fighting
-
-  // Orbit timings (compensate for skipped lock pause)
-  // const ORBIT_EXTEND_MS      = 1000; // unused
-  // Side/front capture tuning
-  const CAPTURE_RADIUS_EXTRA  = 140;   // added to asteroid.radius
-  const GRAV_ACCEL_BASE       = 0.00022; // px/ms^2, tuned
-  const GRAV_ACCEL_MAX        = 0.05;    // clamp
-  const FAST_FLYBY_SPEED      = 0.95;    // px/ms: ignore gravity above this
-  const NEAR_SPEED_MIN        = 0.40;    // “near-speed” lower bound
-  const NEAR_SPEED_MAX        = 0.80;    // “near-speed” upper bound
-  const FRONT_CONE_DEG        = 35;      // angle cone for front-capture
   // Decode UI timings
   // const DECODE_DURATION_MS   = 1200;            // unused (beamUi.DECODE_DURATION_MS used instead)
   // const MULTIPLIER_DELAY_MS  = 300;             // unused (beamUi.MULTIPLIER_DELAY_MS used instead)
@@ -376,12 +496,46 @@ const Game: React.FC = () => {
   const resumeInfoRef = useRef<{ index: number; offsetSec: number } | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
   const [showSongList, setShowSongList] = useState(false);
+  const [showQuotaDisplay, setShowQuotaDisplay] = useState(false);
   const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('easy');
+  
+  // YouTube Music Integration State
+  const [youtubeVideo, setYouTubeVideo] = useState<YouTubeVideo | null>(null);
+  const [youtubeChannel, setYouTubeChannel] = useState<YouTubeChannel | null>(null);
+  const [youtubeIsPlaying, setYouTubeIsPlaying] = useState(false);
+  const [musicSource, setMusicSource] = useState<MusicSource>('local'); // Default to local (no API calls!)
+  const [youtubeEnabled, setYouTubeEnabled] = useState(false); // Disabled by default
+  const [customChannelUrl, setCustomChannelUrl] = useState('');
+  const [channelLoading, setChannelLoading] = useState(false);
+  const [channelError, setChannelError] = useState('');
   // Stable refs for values used inside callbacks to avoid unnecessary deps
   // We mirror difficulty into a ref for use inside stable callbacks (e.g., key handlers, gameLoop)
   // to avoid expanding dependency arrays and re-creating those callbacks every state change.
   const difficultyRef = useRef(difficulty);
   useEffect(() => { difficultyRef.current = difficulty; }, [difficulty]);
+  
+  // Song list click-outside handler
+  const songListRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showSongList) return;
+    
+    const handleClickOutside = (event: MouseEvent) => {
+      if (songListRef.current && !songListRef.current.contains(event.target as Node)) {
+        setShowSongList(false);
+      }
+    };
+    
+    // Add small delay before adding listener to prevent immediate close
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('mousedown', handleClickOutside);
+    }, 100);
+    
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showSongList]);
+  
   // Background tools dropdown
   // Debug HUD
   const [showDebugHud, setShowDebugHud] = useState(false);
@@ -398,694 +552,111 @@ const Game: React.FC = () => {
   const DUCK_HOLD_MS = 6000; // 6 seconds (extended per request)
   const RESTORE_MS = 2000;   // 2 seconds
 
-  // Helper: directly set the canvas pixel size and remember base dims
-  const setCanvasPixelSize = ({ w, h }: { w: number; h: number }) => {
-    const c = canvasRef.current;
-    if (c) {
-      c.width = w;
-      c.height = h;
-    }
-    baseCanvasRef.current = { w, h };
-    // keep a React state copy for UI if needed
-    setCanvasDims({ w, h });
+  // Minimal local helper to trigger level-end ducking using existing refs/state
+  const triggerLevelEndDucking = () => {
+    // Snapshot current volumes
+    musicVolOrigRef.current = musicVol;
+    sfxVolOrigRef.current = sfxVol;
+    // Begin boost phase and timestamp
+    duckPhaseRef.current = 'boost';
+    duckT0Ref.current = performance.now();
+    // Immediate adjustment; ramp/restore handled elsewhere per existing logic
+    try { soundSystem.setMusicVolume(Math.max(0, musicVol * 0.35)); } catch {}
+    try { soundSystem.setSfxVolume(Math.min(1, sfxVol + 0.3)); } catch {}
   };
 
-  // Safely start music without double-starting the same track
-  const safePlayMusic = (index?: number) => {
-    const ms = soundSystem.getMusicState();
-    const targetIdx = typeof index === 'number' ? index : ms.index;
-    // If already playing this exact index, do nothing
-    if (ms.isPlaying && ms.index === targetIdx) return;
-    if (typeof index === 'number') soundSystem.playMusic(index);
-    else soundSystem.playMusic();
-    setMusicPlaying(true);
-    setMusicUserPaused(false);
-  };
+  
 
-  const handlePrevTrack = () => {
-    const ms = soundSystem.getMusicState();
-    const count = ms.trackCount;
-    if (count <= 0) return;
-    const nextIdx = (ms.index - 1 + count) % count;
-    setMusicIndex(nextIdx);
-    safePlayMusic(nextIdx);
-  };
+  // Delegate to controls for safe playback
+  const safePlayMusic = (index?: number) => controls.safePlayMusic(index);
 
-  const handleNextTrack = () => {
-    const ms = soundSystem.getMusicState();
-    const count = ms.trackCount;
-    if (count <= 0) return;
-    const nextIdx = (ms.index + 1) % count;
-    setMusicIndex(nextIdx);
-    safePlayMusic(nextIdx);
-  };
+  const handlePrevTrack = () => controls.prev();
+  const handleNextTrack = () => controls.next();
 
   // (Target rings removed per user request)
 
-  // Small helper to compute stereo pan from an on-screen x position (-1..1)
-  const panFromX = (x: number) => {
-    return Math.max(-1, Math.min(1, (x - CANVAS_WIDTH / 2) / (CANVAS_WIDTH / 2)));
-  };
+  // Toggle Fit-to-Window handler that delegates to extracted helper with proper deps
+  const onToggleFit = useCallback(() => {
+    const ensureStarsForCanvasCb = () =>
+      ensureStarsForCanvas({
+        starsRef,
+        initialAreaRef,
+        initialStarCountRef,
+        CANVAS_WIDTH,
+        CANVAS_HEIGHT,
+      });
 
-  // Compute width/height that fit within max bounds while preserving aspect ratio
-  const computeFitSize = (baseW: number, baseH: number, maxW: number, maxH: number) => {
-    const scale = Math.min(maxW / baseW, maxH / baseH);
-    const w = Math.max(100, Math.floor(baseW * scale));
-    const h = Math.max(100, Math.floor(baseH * scale));
-    return { w, h };
-  };
-
-  // Apply non-fullscreen fit-to-window sizing
-  const applyFitSizing = useCallback(() => {
-    const margin = 48; // px around canvas inside page
-    const controlsReserve = 200; // reserve some vertical space for UI below
-    const maxW = Math.max(100, window.innerWidth - margin * 2);
-    const maxH = Math.max(100, window.innerHeight - controlsReserve - margin);
-    const { w: bw, h: bh } = initialCanvasRef.current;
-    const { w, h } = computeFitSize(bw || CANVAS_WIDTH, bh || CANVAS_HEIGHT, maxW, maxH);
-    setCanvasSize(w, h);
-    setCanvasPixelSize({ w, h });
-    // Adjust star density for new canvas area
-    ensureStarsForCanvas();
-  }, [ensureStarsForCanvas]);
-
-  // Music track change handler for dropdown (state updates handled in UI component)
-
-  // Level-end background crossfade
-  const levelEndStartRef = useRef<number>(0);
-  const fadeInStartRef = useRef<number>(0);
-  const fadeInActiveRef = useRef<boolean>(false);
-  const gameOverStartRef = useRef<number | null>(null);
-
-  const triggerLevelEndDucking = () => {
-    if (duckPhaseRef.current !== 'none') return;
-    if (isMuted) return;
-    // Snapshot current intended volumes
-    musicVolOrigRef.current = musicVol;
-    sfxVolOrigRef.current = preferredSfxVol;
-    duckPhaseRef.current = 'boost';
-    duckT0Ref.current = performance.now();
-    // Immediate change
-    const musicDuck = 0.08; // very low music
-    const sfxBoost = 0.7;   // 70% SFX during hold
-    soundSystem.setMusicVolume(musicDuck);
-    soundSystem.setSfxVolume(sfxBoost);
-  };
-
-  // Bottom-left background tools dropdown
-  interface BackgroundDropdownProps {
-    open: boolean;
-    onToggle: () => void;
-    onNextBackground: () => void;
-    bgOpacity: number;
-    bgContrast: number;
-    bgBrightness: number;
-    setBgOpacity: (v: number) => void;
-    setBgContrast: (v: number) => void;
-    setBgBrightness: (v: number) => void;
-    effectsApply: { background: boolean; stars: boolean; distantStars: boolean; warpTrails: boolean };
-    setEffectsApply: (fn: (prev: { background: boolean; stars: boolean; distantStars: boolean; warpTrails: boolean }) => { background: boolean; stars: boolean; distantStars: boolean; warpTrails: boolean }) => void;
-    trailsEnabled: boolean;
-    setTrailsEnabled: (v: boolean) => void;
-    trailsStrength: number;
-    setTrailsStrength: (v: number) => void;
-    trailsTargets: { player: boolean; ufos: boolean; asteroids: boolean };
-    setTrailsTargets: (fn: (prev: { player: boolean; ufos: boolean; asteroids: boolean }) => { player: boolean; ufos: boolean; asteroids: boolean }) => void;
-  }
-  const BackgroundDropdown: React.FC<BackgroundDropdownProps> = ({
-    open,
-    onToggle,
-    onNextBackground,
-    bgOpacity,
-    bgContrast,
-    bgBrightness,
-    setBgOpacity,
-    setBgContrast,
-    setBgBrightness,
-    effectsApply,
-    setEffectsApply,
-    trailsEnabled,
-    setTrailsEnabled,
-    trailsStrength,
-    setTrailsStrength,
-    trailsTargets,
-    setTrailsTargets,
-  }) => {
-    return (
-      <div className="fixed right-4 top-1/2 -translate-y-1/2 z-40">
-        <button
-          type="button"
-          onClick={onToggle}
-          className="px-3 py-1.5 text-xs rounded bg-cyan-700 hover:bg-cyan-600 text-white border border-cyan-400 shadow"
-        >
-          {open ? 'Effects / CPU usage ▾' : 'Effects / CPU usage ▸'}
-        </button>
-        {open && (
-          <div className="mt-2 w-72 p-3 rounded bg-gray-900/95 border border-cyan-700 shadow-xl">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-sm font-semibold text-cyan-300">Effects / CPU usage</div>
-              <button onClick={onNextBackground} className="px-2 py-0.5 text-xs rounded bg-cyan-700 hover:bg-cyan-600 border border-cyan-400">Change</button>
-            </div>
-            <div className="space-y-2 mb-2">
-              <div className="text-xs text-gray-300 font-semibold">Affect these items:</div>
-              <label className="flex items-center gap-2 text-xs text-gray-200">
-                <input type="checkbox" checked={effectsApply.background} onChange={(e)=>setEffectsApply(p=>({...p, background: e.target.checked}))} /> Background
-              </label>
-              <label className="flex items-center gap-2 text-xs text-gray-200">
-                <input type="checkbox" checked={effectsApply.stars} onChange={(e)=>setEffectsApply(p=>({...p, stars: e.target.checked}))} /> Stars
-              </label>
-              <label className="flex items-center gap-2 text-xs text-gray-200">
-                <input type="checkbox" checked={effectsApply.distantStars} onChange={(e)=>setEffectsApply(p=>({...p, distantStars: e.target.checked}))} /> Distant stars
-              </label>
-              <label className="flex items-center gap-2 text-xs text-gray-200">
-                <input type="checkbox" checked={effectsApply.warpTrails} onChange={(e)=>setEffectsApply(p=>({...p, warpTrails: e.target.checked}))} /> Warp trails
-              </label>
-            </div>
-            <div className="space-y-1 mb-3 pt-2 border-t border-cyan-800/50">
-              <label className="flex items-center gap-2 text-xs text-gray-200">
-                <input type="checkbox" checked={trailsEnabled} onChange={(e)=>setTrailsEnabled(e.target.checked)} /> Motion trails (frame accumulation)
-              </label>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1 pl-5">
-                <label className="flex items-center gap-2 text-xs text-gray-200">
-                  <input type="checkbox" checked={trailsTargets.player} onChange={(e)=>setTrailsTargets(p=>({...p, player: e.target.checked}))} disabled={!trailsEnabled} /> Player
-                </label>
-                <label className="flex items-center gap-2 text-xs text-gray-200">
-                  <input type="checkbox" checked={trailsTargets.ufos} onChange={(e)=>setTrailsTargets(p=>({...p, ufos: e.target.checked}))} disabled={!trailsEnabled} /> UFOs
-                </label>
-                <label className="flex items-center gap-2 text-xs text-gray-200">
-                  <input type="checkbox" checked={trailsTargets.asteroids} onChange={(e)=>setTrailsTargets(p=>({...p, asteroids: e.target.checked}))} disabled={!trailsEnabled} /> Asteroids
-                </label>
-              </div>
-              <label className="block text-xs text-gray-300">
-                Trail length: {Math.round(trailsStrength * 100)}%
-                <input
-                  className="w-full"
-                  type="range"
-                  min={0.08}
-                  max={0.45}
-                  step={0.01}
-                  value={trailsStrength}
-                  onChange={(e)=>setTrailsStrength(parseFloat(e.target.value))}
-                  disabled={!trailsEnabled}
-                />
-              </label>
-            </div>
-            <label className="block text-xs text-gray-300">
-              Opacity: {Math.round(bgOpacity * 100)}%
-              <input
-                className="w-full"
-                type="range"
-                min={0}
-                max={1.0}
-                step={0.01}
-                value={bgOpacity}
-                onChange={(e) => setBgOpacity(parseFloat(e.target.value))}
-              />
-            </label>
-            <label className="block text-xs text-gray-300">
-              Contrast: {Math.round(bgContrast * 100)}%
-              <input
-                className="w-full"
-                type="range"
-                min={0}
-                max={2.0}
-                step={0.01}
-                value={bgContrast}
-                onChange={(e) => setBgContrast(parseFloat(e.target.value))}
-              />
-            </label>
-            <label className="block text-xs text-gray-300">
-              Brightness: {Math.round(bgBrightness * 100)}%
-              <input
-                className="w-full"
-                type="range"
-                min={0}
-                max={1.0}
-                step={0.01}
-                value={bgBrightness}
-                onChange={(e) => setBgBrightness(parseFloat(e.target.value))}
-              />
-            </label>
-          </div>
-        )}
-      </div>
+    toggleFitToWindow(
+      {
+        initialCanvasRef,
+        ensureStarsForCanvas: ensureStarsForCanvasCb,
+        setCanvasSize,
+        setCanvasPixelSize,
+        setIsFitted,
+      },
+      isFittedRef
     );
-  };
+  }, [setIsFitted]);
 
-  // Draw Refuel Station and handle docking/refill (world-tiling: only when in same tile)
-  const drawRefuelStation = (ctx: CanvasRenderingContext2D, gameState: GameState) => {
-    const st = gameState.refuelStation;
-    if (!st || !st.position) return;
-    // Only draw when player is in the same world tile
-    if (gameState.worldTileX !== st.tileX || gameState.worldTileY !== st.tileY) return;
-    const { player } = gameState;
-    const sx = st.position.x;
-    const sy = st.position.y;
 
-    // Station visual: ring + pylon + light
-    ctx.save();
-    ctx.translate(sx, sy);
-    // Outer glow
-    ctx.shadowColor = '#88ffcc';
-    ctx.shadowBlur = 18;
-    ctx.strokeStyle = '#88ffcc';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(0, 0, 18, 0, Math.PI * 2);
-    ctx.stroke();
-    // Inner ring
-    ctx.shadowBlur = 10;
-    ctx.strokeStyle = '#66d9aa';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, 10, 0, Math.PI * 2);
-    ctx.stroke();
-    // Rotating tick marks (flair)
-    const t = performance.now() * 0.004;
-    ctx.save();
-    ctx.rotate(t);
-    ctx.strokeStyle = '#caffee';
-    ctx.lineWidth = 1.5;
-    for (let i = 0; i < 6; i++) {
-      ctx.rotate((Math.PI * 2) / 6);
-      ctx.beginPath();
-      ctx.moveTo(12, 0);
-      ctx.lineTo(18, 0);
-      ctx.stroke();
-    }
-    ctx.restore();
-    // Pylon
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = '#3a6355';
-    ctx.fillRect(-3, -22, 6, 12);
-    // Beacon
-    const pulse = 0.6 + 0.4 * Math.sin(performance.now() * 0.006);
-    ctx.fillStyle = `rgba(136,255,204,${pulse})`;
-    ctx.beginPath();
-    ctx.arc(0, -24, 4, 0, Math.PI * 2);
-    ctx.fill();
+// ...
 
-    // Docking/refill
-    const dx = sx - player.position.x;
-    const dy = sy - player.position.y;
-    const dist = Math.hypot(dx, dy);
-    const canDock = dist < 30;
-    if (canDock) {
-      // SFX: on first engage, play soft ping and a whoosh (rate-limited)
-      const nowTs = performance.now();
-      if (!dockingActiveRef.current) {
-        dockingActiveRef.current = true;
-        if (nowTs - lastDockPingAtRef.current > 600) {
-          soundSystem.playDockPing();
-          lastDockPingAtRef.current = nowTs;
-        }
-        if (nowTs - lastTractorWhooshAtRef.current > 800) {
-          soundSystem.playTractorWhoosh();
-          lastTractorWhooshAtRef.current = nowTs;
-        }
-        // Play refuel energy cue once on engage
-        soundSystem.playRefuelEnergy();
-      }
-      const maxFuel = player.maxFuel ?? 100;
-      const curFuel = player.fuel ?? 0;
-      if (curFuel < maxFuel) {
-        // Refill gradually
-        const refillRate = 1.2; // units per frame (faster)
-        player.fuel = Math.min(maxFuel, curFuel + refillRate);
-        // Slight slowdown while docked
-        player.velocity = multiplyVector(player.velocity, 0.92);
-        // Docking hint ring
-        ctx.save();
-        ctx.globalAlpha = 0.6;
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(0, 0, 24, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.restore();
-      }
-    } else {
-      dockingActiveRef.current = false;
-    }
-    ctx.restore();
+// Level-end background crossfade
+const levelEndStartRef = useRef<number>(0);
+const fadeInStartRef = useRef<number>(0);
+const fadeInActiveRef = useRef<boolean>(false);
+const gameOverStartRef = useRef<number | null>(null);
 
-    // Player docking glow overlay
-    if (canDock) {
-      ctx.save();
-      ctx.globalAlpha = 0.35;
-      ctx.fillStyle = 'rgba(136,255,204,0.45)';
-      ctx.beginPath();
-      ctx.arc(player.position.x, player.position.y, 26, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-      // Tractor beam (soft gradient line)
-      const bx0 = sx, by0 = sy;
-      const bx1 = player.position.x, by1 = player.position.y;
-      const grad = ctx.createLinearGradient(bx0, by0, bx1, by1);
-      grad.addColorStop(0, 'rgba(136,255,204,0.45)');
-      grad.addColorStop(1, 'rgba(136,255,204,0.0)');
-      ctx.save();
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(bx0, by0);
-      ctx.lineTo(bx1, by1);
-      ctx.stroke();
-      ctx.restore();
-    }
-  };
+// ...
 
-  // Toggle non-fullscreen Fit-to-Window
-  const toggleFitToWindow = () => {
-    if (!isFitted) {
-      // Apply aspect-fit sizing computed from initial canvas size
-      setIsFitted(true);
-      applyFitSizing();
-    } else {
-      // Restore initial size from app start
-      const { w, h } = initialCanvasRef.current;
-      setCanvasSize(w, h);
-      setCanvasPixelSize({ w, h });
-      setIsFitted(false);
-      // Restore star density to initial
-      regenerateStars(initialStarCountRef.current);
-    }
-  };
+// Pause control (game auto-start behavior remains unchanged)
+const [isPaused, setIsPaused] = useState(false);
+const isPausedRef = useRef(false);
+useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
+// Track if any modal/popup is open (needed by gameLoop closure)
+const anyModalOpenRef = useRef(false);
+// Freeze clock for rendering while paused (UI-only time freeze)
+const pauseFreezeNowRef = useRef<number | undefined>(undefined);
 
-  // Draw Reward Ship and handle docking reward / escort behavior (world-tiling)
-  const drawRewardShip = (ctx: CanvasRenderingContext2D, gameState: GameState) => {
-    const rw = gameState.rewardShip;
-    if (!rw || !rw.position) return;
-    // Only when in same tile
-    if (gameState.worldTileX !== rw.tileX || gameState.worldTileY !== rw.tileY) return;
-    const { player } = gameState;
-    const sx = rw.position.x;
-    const sy = rw.position.y;
-    // Escort behavior update
-    if (rw.escortTimer && rw.escortTimer > 0) {
-      rw.escortTimer -= 1;
-      // Desired offset: hover to the right of player and slightly back
-      const offsetR = 42;
-      const theta = player.rotation;
-      const ox = Math.cos(theta) * 18 + Math.cos(theta + Math.PI / 2) * offsetR;
-      const oy = Math.sin(theta) * 18 + Math.sin(theta + Math.PI / 2) * offsetR;
-      const targetX = player.position.x + ox;
-      const targetY = player.position.y + oy;
-      const toTargetX = targetX - (rw.position.x);
-      const toTargetY = targetY - (rw.position.y);
-      rw.velocity = rw.velocity || { x: 0, y: 0 };
-      rw.velocity.x = rw.velocity.x * 0.9 + toTargetX * 0.06;
-      rw.velocity.y = rw.velocity.y * 0.9 + toTargetY * 0.06;
-      // Move
-      rw.position.x += rw.velocity.x;
-      rw.position.y += rw.velocity.y;
-      // Sparkle trail: tiny fading dots behind escort ship
-      ctx.save();
-      ctx.globalAlpha = 0.6;
-      const ang = Math.atan2(rw.velocity.y, rw.velocity.x);
-      for (let i = 0; i < 3; i++) {
-        const r = 6 + Math.random() * 10;
-        const jitter = (Math.random() - 0.5) * 6;
-        const trailX = sx - Math.cos(ang) * r + jitter;
-        const trailY = sy - Math.sin(ang) * r + jitter;
-        const size = 1 + Math.random() * 1.5;
-        ctx.fillStyle = 'rgba(207,227,255,0.7)';
-        ctx.beginPath(); ctx.arc(trailX, trailY, size, 0, Math.PI * 2); ctx.fill();
-      }
-      ctx.restore();
-    } else if (rw.departTimer && rw.departTimer > 0) {
-      rw.departTimer -= 1;
-      // Move outward from center
-      const cx = CANVAS_WIDTH / 2, cy = CANVAS_HEIGHT / 2;
-      const vx = (sx - cx) * 0.02;
-      const vy = (sy - cy) * 0.02;
-      rw.position.x += vx;
-      rw.position.y += vy;
-      if (rw.departTimer <= 0) {
-        gameState.rewardShip = null;
-      }
-    }
+// Helper: directly set the canvas pixel size and remember base dims
+  // Instantiate keyboard handlers via factory (stable identity)
+  const { onKeyDown, onKeyUp } = useMemo(() => createInputHandlers({
+    gameStateRef,
+    isPausedRef,
+    CANVAS_WIDTH,
+    CANVAS_HEIGHT,
+    soundSystem,
+    requestRestart: () => { try { initGame(); } catch {} },
 
-    ctx.save();
-    ctx.translate(sx, sy);
-    // Silhouette with shimmer
-    const t = performance.now() * 0.003;
-    ctx.shadowColor = '#cfe3ff';
-    ctx.shadowBlur = 14 + 6 * Math.sin(t * 0.8);
-    ctx.strokeStyle = '#cfe3ff';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.moveTo(-14, 6);
-    ctx.lineTo(0, -10);
-    ctx.lineTo(14, 6);
-    ctx.lineTo(9, 6);
-    ctx.lineTo(0, -2);
-    ctx.lineTo(-9, 6);
-    ctx.closePath();
-    ctx.stroke();
-    // Dots
-    ctx.fillStyle = 'rgba(207,227,255,0.9)';
-    ctx.beginPath(); ctx.arc(-6, 2, 2, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(6, 2, 2, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
+    unlimitedMissilesRef,
+    lastMissileFireAtRef,
+    missileBurstCountRef,
+    lastMissileEventRef,
+    trailsSuspendUntilRef,
+    trailsFadeInStartRef,
 
-    // Docking check
-    const dx = sx - player.position.x;
-    const dy = sy - player.position.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < 28) {
-      // Grant varied reward
-      const roll = Math.random();
-      if (roll < 0.4) {
-        // Missiles +1 (cap 5)
-        const have = Math.max(0, player.missiles || 0);
-        player.missiles = Math.min(5, have + 1);
-      } else if (roll < 0.7) {
-        // Double shooter buff
-        player.doubleShooter = Math.min(900, (player.doubleShooter || 0) + 300);
-        player.doubleShooterStacks = Math.min(2, (player.doubleShooterStacks || 0) + 1);
-      } else if (roll < 0.85) {
-        // Heal
-        player.health = Math.min(player.maxHealth, player.health + 20);
-        healthBrightUntilRef.current = performance.now() + 800;
-      } else {
-        // Score
-        gameState.score += 300;
-        scoreDropUntilRef.current = performance.now() + 800;
-      }
-      // Enter escort mode then depart
-      if (gameState.rewardShip) {
-        gameState.rewardShip.escortTimer = 240; // ~4s escort
-        gameState.rewardShip.departTimer = 180; // departure countdown after escort
-      }
+    difficultyRef,
 
-      // Docking overlay
-      ctx.save();
-      ctx.globalAlpha = 0.35;
-      ctx.fillStyle = 'rgba(207,227,255,0.55)';
-      ctx.beginPath();
-      ctx.arc(player.position.x, player.position.y, 24, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
-    }
-  };
+    multiplyVector,
+    createBullet,
+    createAlienBullet,
+    toggleDebugHud: () => setShowDebugHud(v => !v),
+    
+    // Dash ability
+    lastKeyPressTimeRef,
+    rotationBeforeFirstPressRef,
+    DOUBLE_TAP_WINDOW_MS,
+  }), []);
 
-  // Keyboard handlers
-  // Keyboard down: stable callback. We read difficulty via difficultyRef to avoid expanding deps.
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (!gameStateRef.current) return;
-    const gs = gameStateRef.current;
-    gs.keys[e.key] = true;
-    if (e.key === 'h' || e.key === 'H') {
-      setShowDebugHud(v => !v);
-    }
-    // Shooting on space
-    if (e.key === ' ' || e.key === 'Spacebar') {
-      e.preventDefault();
-      const player = gs.player;
-      // Level 1: always fire three shots (center and +/- spread), entire level
-      if (gs.stage === 1) {
-        const spread = 0.10;
-        gs.bullets.push(createBullet(player.position, player.rotation));
-        gs.bullets.push(createBullet(player.position, player.rotation - spread));
-        gs.bullets.push(createBullet(player.position, player.rotation + spread));
-        soundSystem.playPlayerShoot();
-        return;
-      }
-      const stacks = Math.max(0, player.doubleShooterStacks || 0);
-      if (player.doubleShooter > 0 && stacks >= 2) {
-        const spread = 0.12;
-        const angles = [
-          player.rotation - spread * 1.5,
-          player.rotation - spread * 0.5,
-          player.rotation + spread * 0.5,
-          player.rotation + spread * 1.5,
-        ];
-        for (const a of angles) gs.bullets.push(createBullet(player.position, a));
-      } else if (player.doubleShooter > 0 && stacks >= 1) {
-        const spread = 0.12;
-        gs.bullets.push(createBullet(player.position, player.rotation - spread));
-        gs.bullets.push(createBullet(player.position, player.rotation + spread));
-      } else {
-        gs.bullets.push(createBullet(player.position, player.rotation));
-      }
-      soundSystem.playPlayerShoot();
-    }
-    // Fire player missile on Enter if available (or activate unlimited when near HUD missile counter)
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const p = gs.player;
-      // If player is near the HUD missile counter (top-right), toggle unlimited missiles for testing
-      // Define a generous hit box around top-right HUD missiles area
-      const hudBoxW = 140, hudBoxH = 64, hudMargin = 16;
-      const hudX0 = CANVAS_WIDTH - hudMargin - hudBoxW;
-      const hudY0 = hudMargin;
-      const px = p.position.x, py = p.position.y;
-      const nearHudMissiles = (px >= hudX0 && px <= hudX0 + hudBoxW && py >= hudY0 && py <= hudY0 + hudBoxH);
-      if (nearHudMissiles) {
-        unlimitedMissilesRef.current = true;
-        p.missiles = 9999; // large sentinel; logic below will avoid decrementing when unlimited
-        return;
-      }
-      // Ensure segment-based ammo is initialized (each slot is worth 5 segments)
-      const pSegInit = p as Player & { missileSegments?: number };
-      if (typeof pSegInit.missileSegments !== 'number') {
-        pSegInit.missileSegments = Math.max(0, (p.missiles || 0) * 5);
-      }
-      // Determine if this press is part of a rapid-fire burst (extras)
-      const nowPress = performance.now();
-      const inBurstWindow = (nowPress - lastMissileFireAtRef.current) < 400; // 0.4s window
-      const isExtra = inBurstWindow && missileBurstCountRef.current >= 1;
-
-      // Enforce max 3 simultaneous player missiles in the air (unless unlimited cheat is active)
-      if (!unlimitedMissilesRef.current) {
-        const activePlayerMissiles = (gs.playerMissiles || []).filter(b => b.owner === 'player').length;
-        if (activePlayerMissiles >= 3) return;
-      }
-      const pSegRead = p as Player & { missileSegments?: number };
-      const segs: number = pSegRead.missileSegments || 0;
-      if (isExtra || unlimitedMissilesRef.current || segs > 0) {
-        // Create a missile at player position heading forward
-        const missile: AlienBullet = createAlienBullet(p.position, p.rotation);
-        missile.owner = 'player';
-        // Extra missiles: simple dumbfire, no lock-on, very low damage
-        if (isExtra) {
-          missile.homing = false;
-          missile.turnRate = 0;
-          missile.damageMultiplier = 0.2;
-          missile.explosionRadius = 30;
-          (missile as PlayerMissileExt).isExtra = true;
-        } else {
-          missile.homing = true;
-          // Stronger homing for primaries
-          missile.turnRate = Math.max(0.12, missile.turnRate || 0.12);
-          missile.damageMultiplier = 10; // ensure kill
-          missile.explosionRadius = 80;
-          (missile as PlayerMissileExt).isExtra = false;
-        }
-        // Slightly faster than alien missile
-        const baseSpeed = 3.6;
-        missile.velocity = multiplyVector({ x: Math.cos(p.rotation), y: Math.sin(p.rotation) }, baseSpeed);
-        missile.radius = 4;
-        // Primary should try to hit its target for ~5 seconds (~300 frames at 60 FPS)
-        missile.maxLife = isExtra ? 220 : 300;
-        missile.locked = true;
-        missile.lostFrames = 0;
-        // Two-phase flight: start straight & slow for 1s, then homing
-        (missile as PlayerMissileExt).bornAt = performance.now();
-        (missile as PlayerMissileExt).phase = 'straight'; // 'straight' -> 'homing'
-        (missile as PlayerMissileExt).straightMs = 1000;
-        // Initialize path history only for primary (extras keep simple visuals)
-        if (!isExtra) {
-          (missile as PlayerMissileExt).history = [{ x: missile.position.x, y: missile.position.y }];
-          (missile as PlayerMissileExt).lastSmokeAt = performance.now();
-        }
-        // Distinct target selection at launch: avoid targets already claimed by active player missiles
-        try {
-          const claimed = new Set<unknown>();
-          for (const m of (gs.playerMissiles || [])) {
-            const mm = m as PlayerMissileExt;
-            if (mm.owner === 'player' && mm.debugTargetRef) claimed.add(mm.debugTargetRef);
-          }
-          const candidates: Array<{ type: 'alien'|'asteroid'; obj: AlienShip | Asteroid; score: number }> = [];
-          // Aliens: missile-type UFOs first (very high score), then other aliens by health, both with distance falloff
-          for (const s of gs.alienShips) {
-            const dx = s.position.x - p.position.x, dy = s.position.y - p.position.y; const d = Math.hypot(dx, dy) || 1;
-            const isMissileType = ('isMissileType' in s) && (s as unknown as { isMissileType?: boolean }).isMissileType === true;
-            const base = isMissileType ? 1_000_000 : 500_000 + Math.max(0, s.health || 0) * 1000;
-            const score = base - d; // prefer closer for tie-breaks
-            candidates.push({ type: 'alien', obj: s, score });
-          }
-          // Asteroids: only large ones; choose closest
-          for (const a of gs.asteroids) {
-            if (a.size !== 'large') continue;
-            const dx = a.position.x - p.position.x, dy = a.position.y - p.position.y; const d = Math.hypot(dx, dy) || 1;
-            const score = 100_000 - d; // prefer closer large asteroids
-            candidates.push({ type: 'asteroid', obj: a, score });
-          }
-          const best = candidates.filter(c => !claimed.has(c.obj)).sort((a,b)=>b.score-a.score)[0];
-          if (best) {
-            const mx = missile as PlayerMissileExt;
-            mx.debugTargetRef = best.obj;
-            mx.debugTargetType = best.type;
-            mx.debugTargetX = best.obj.position.x;
-            mx.debugTargetY = best.obj.position.y;
-          }
-        } catch {}
-        // Determine accuracy based on difficulty (primary more accurate ~90%)
-        // Use current difficulty via ref to avoid hook dependency churn
-        const diff = difficultyRef.current === 'easy' ? -1 : (difficultyRef.current === 'hard' ? 1 : 0); // -1 easy, 0 med, +1 hard
-        const primaryAcc = 1.0; // always lock when a valid target exists
-        const baseAcc = diff < 0 ? 0.8 : diff > 0 ? 0.5 : 0.7;
-        const accChance = isExtra ? baseAcc : primaryAcc;
-        const miss = Math.random() > accChance;
-        if (isExtra) {
-          // extras already dumbfire; nothing to set
-        } else {
-          if (miss) {
-            // Primary rare miss -> no lock, fly straight
-            missile.homing = false;
-            const mx = missile as PlayerMissileExt;
-            mx.debugTargetRef = undefined;
-            mx.debugTargetType = undefined;
-            mx.debugTargetX = undefined;
-            mx.debugTargetY = undefined;
-          } else {
-            // Accurate primary: no offset; chase true target position
-            missile.targetOffsetX = 0; missile.targetOffsetY = 0;
-          }
-        }
-        // Re-check cap just before adding (belt and suspenders)
-        if (!unlimitedMissilesRef.current) {
-          const activeNow = (gs.playerMissiles || []).filter(b => b.owner === 'player').length;
-          if (activeNow >= 3) return;
-        }
-        gs.playerMissiles!.push(missile);
-        // Ammo consumption: only primary consumes ammo (one segment per shot)
-        if (!unlimitedMissilesRef.current && !isExtra) {
-          const pSegWrite = p as Player & { missileSegments?: number };
-          pSegWrite.missileSegments = Math.max(0, (pSegWrite.missileSegments || 0) - 1);
-        }
-        soundSystem.playMissileLaunch();
-        // Suspend motion trails while missile and ensuing effects are active
-        trailsSuspendUntilRef.current = performance.now() + 1000; // at least 1s
-        trailsFadeInStartRef.current = 0; // reset fade-in
-        lastMissileEventRef.current = performance.now();
-        // Track burst window and count
-        if (inBurstWindow) {
-          missileBurstCountRef.current = Math.min(6, missileBurstCountRef.current + 1);
-        } else {
-          missileBurstCountRef.current = 1; // primary
-        }
-        lastMissileFireAtRef.current = nowPress;
-      }
-    }
-  }, []);
-
-  const handleKeyUp = useCallback((e: KeyboardEvent) => {
-    if (!gameStateRef.current) return;
-    gameStateRef.current.keys[e.key] = false;
-  }, []);
+  // Attach keyboard listeners
+  useEffect(() => {
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [onKeyDown, onKeyUp]);
 
   // Small dust-only debris (for hit impacts)
   const spawnSmallDebris = (asteroid: Asteroid, count: number) => {
@@ -1116,25 +687,63 @@ const Game: React.FC = () => {
   };
   // Intro/tier helpers
   const lastIntroStepRef = useRef<number>(0);
-  // Pause control (game auto-start behavior remains unchanged)
-  const [isPaused, setIsPaused] = useState(false);
-  const isPausedRef = useRef(false);
-  useEffect(() => { isPausedRef.current = isPaused; }, [isPaused]);
+  
+  useEffect(() => {
+    freezeRenderClockOnPause({ isPausedRef, pauseFreezeNowRef });
+    log('pause:toggle', { paused: isPaused });
+  }, [isPaused]);
   // Music UX toggles (UI only)
   // Removed unused music UX toggles to satisfy lint (no functional change)
   // Risqué music opt-in
   const [showRisqueModal, setShowRisqueModal] = useState(false);
   const [risqueAgreeChecked, setRisqueAgreeChecked] = useState(false);
   const [risqueAnswer, setRisqueAnswer] = useState('');
+  
+  // Scoreboard state
+  const [showScoreboard, setShowScoreboard] = useState(false);
+  const [finalScore, setFinalScore] = useState(0);
+  const [finalStage, setFinalStage] = useState(1);
+  const [rewardAmount, setRewardAmount] = useState(0);
+  const [targetScoreIdLeaderboard, setTargetScoreIdLeaderboard] = useState<string | undefined>(undefined);
+  
+  // Auth state
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [currentUser, setCurrentUser] = useState(getCurrentUser());
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  
+  // Ticket randomizer state
+  const [showTicketRandomizer, setShowTicketRandomizer] = useState(false);
+  const [randomizerFlipitPercent, setRandomizerFlipitPercent] = useState(0);
+  
+  // Sync anyModalOpenRef with modal states (must be after all state declarations)
+  useEffect(() => {
+    anyModalOpenRef.current = showTicketRandomizer || showScoreboard || showLeaderboard || showLoginModal || showInstructions || showRisqueModal || showStats || infoOpen;
+  }, [showTicketRandomizer, showScoreboard, showLeaderboard, showLoginModal, showInstructions, showRisqueModal, showStats, infoOpen]);
+  
+  // Stable callback for ticket randomizer to prevent animation restart
+  const handleTicketRandomizerComplete = useCallback(() => {
+    setShowTicketRandomizer(false);
+    
+    // Check if we need to show bonus randomizer for high scores
+    if (autoDestructionBonusRandomizerPendingRef.current) {
+      autoDestructionBonusRandomizerPendingRef.current = false;
+      const bonusScore = autoDestructionScoreRef.current - 10000;
+      const bonusChance = (bonusScore / 10000) * 100;
+      
+      if (bonusChance > 0) {
+        // Show bonus randomizer after a short delay
+        setTimeout(() => {
+          setRandomizerFlipitPercent(bonusChance);
+          setShowTicketRandomizer(true);
+        }, 800);
+      }
+    }
+  }, []); // No dependencies needed since we use refs
+  
   const risqueAnswerValid = /^\s*(y|yes)\s*$/i.test(risqueAnswer);
   const [risquePromptFlash, setRisquePromptFlash] = useState(false);
 
-  // Helper to present cleaner song titles (strip leading numbers or S# prefixes)
-  const formatTrackName = useCallback((raw: string) => {
-    // Remove leading patterns like '01 ', '1_', 'S1 -', 's12.' and common separators
-    const stripped = raw.replace(/^\s*(?:[0-9]+|[sS][0-9]+)[\s._-]*/,'').trim();
-    return stripped || raw;
-  }, []);
+  // Helper extracted to ui/musicUtils.ts
   
   // Initialize gameState with useState
   const [gameState] = useState<GameState>(() => ({
@@ -1205,36 +814,6 @@ const Game: React.FC = () => {
     }
   };
 
-  const drawVisualDebris = (ctx: CanvasRenderingContext2D) => {
-    if (!gameState.visualDebris || gameState.visualDebris.length === 0) return;
-    for (const d of gameState.visualDebris) {
-      const t = d.life / d.maxLife;
-      const alpha = Math.max(0, 1 - t); // fade out
-      ctx.save();
-      ctx.globalAlpha = alpha * 0.9;
-      ctx.translate(d.position.x, d.position.y);
-      if (d.kind === 'chunk') {
-        ctx.rotate(d.rotation ?? 0);
-        ctx.fillStyle = d.color;
-        // Draw small irregular quad/triangle
-        ctx.beginPath();
-        const s = d.size;
-        ctx.moveTo(-s, -s * 0.6);
-        ctx.lineTo(s * 0.8, -s * 0.4);
-        ctx.lineTo(s, s * 0.5);
-        ctx.lineTo(-s * 0.5, s * 0.7);
-        ctx.closePath();
-        ctx.fill();
-      } else {
-        // dust
-        ctx.fillStyle = d.color;
-        ctx.beginPath();
-        ctx.arc(0, 0, d.size * (0.8 + 0.4 * Math.random()), 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-  };
 
   // Song title overlay animation (typing + fade + float)
   const titleOverlaysRef = useRef<Array<{ id: number; text: string; start: number }>>([]);
@@ -1245,21 +824,14 @@ const Game: React.FC = () => {
   const suppressTitleUntilRef = useRef<number>(0);
 
 
-  const queueQuip = useCallback((text: string, delayMs = 0) => {
-    window.setTimeout(() => {
-      titleOverlaysRef.current.push({ id: nextTitleIdRef.current++, text, start: performance.now() });
-    }, delayMs);
-  }, []);
-
   // Periodically persist playback info while playing; also on tab hide/unload
   useEffect(() => {
     const save = () => {
       try {
         const info = soundSystem.getPlaybackInfo();
-        // Only persist if actively playing or we have a non-zero offset
         if (info.isPlaying || info.offsetSec > 0) {
           const data = { index: info.index, offsetSec: info.offsetSec };
-          localStorage.setItem(MUSIC_RESUME_KEY, JSON.stringify(data));
+          saveResumeInfo(MUSIC_RESUME_KEY, data);
           resumeInfoRef.current = data;
         }
       } catch { /* ignore */ }
@@ -1276,13 +848,26 @@ const Game: React.FC = () => {
     };
   }, []);
 
+  // Set up YouTube state change listener (don't init automatically - wait for user to enable)
+  useEffect(() => {
+    // Set up YouTube state change listener
+    soundSystem.onYouTubeStateChange((video, channel, isPlaying) => {
+      setYouTubeVideo(video);
+      setYouTubeChannel(channel);
+      setYouTubeIsPlaying(isPlaying);
+    });
+    
+    // Note: YouTube init happens when user enables it (see checkbox onChange)
+    console.log('🎮 Game loaded with local music only (0 API calls). Enable YouTube to load playlist.');
+  }, []);
+
   useEffect(() => {
     // Single handler: keep UI index in sync and show the title after 2s
     soundSystem.setOnMusicTrackChange((index: number) => {
       setMusicIndex(index);
       const now = performance.now();
       // Suppress during guarded window (e.g., first-start manual enqueue)
-      if (now < suppressTitleUntilRef.current) {
+      if (shouldSuppress({ listRef: titleOverlaysRef, nextIdRef: nextTitleIdRef, suppressUntilRef: suppressTitleUntilRef })) {
         return;
       }
       const last = lastTitleInfoRef.current;
@@ -1301,14 +886,9 @@ const Game: React.FC = () => {
         const formatted = formatTrackName(t.name);
         if (!formatted) return;
         // Skip if a same-title overlay already exists and started recently (<4s)
-        const now2 = performance.now();
-        const dup = titleOverlaysRef.current.some(o => o.text === `♪ ${formatted}` && (now2 - o.start) < 4000);
+        const dup = seenRecently({ listRef: titleOverlaysRef, nextIdRef: nextTitleIdRef }, `♪ ${formatted}`, 4000);
         if (dup) return;
-        titleOverlaysRef.current.push({
-          id: nextTitleIdRef.current++,
-          text: `♪ ${formatted}`,
-          start: performance.now()
-        });
+        enqueueTitle({ listRef: titleOverlaysRef, nextIdRef: nextTitleIdRef }, `♪ ${formatted}`, 0);
       }, 2000);
     });
     return () => {
@@ -1357,126 +937,44 @@ const Game: React.FC = () => {
     gameStartTimeRef.current = performance.now();
     autoPopupShownRef.current = false;
     
-    // Initialize random stars
-    initialAreaRef.current = CANVAS_WIDTH * CANVAS_HEIGHT;
-    initialStarCountRef.current = 200;
-    regenerateStars(initialStarCountRef.current);
-
-    // Discover available backdrops (files starting with backdrop_ in images/)
-    // Use ref to avoid coupling initGame to backdrop state changes
-    if (backdropsRef.current.length === 0) {
-      try {
-        const modules = import.meta.glob('../images/backdrop_*', { eager: true, as: 'url' }) as Record<string, string>;
-        const urls = Object.values(modules).filter(Boolean);
-        const list = urls.length > 0 ? urls : [];
-        setBackdrops(list);
-        // Pick a new random backdrop for zoom-in start
-        if (list.length > 0) {
-          const newIdx = Math.floor(Math.random() * list.length);
-          const src = list[newIdx];
-          setBackdropIndex(newIdx);
-          // Update page background immediately for zoom-in effect
-          try {
-            document.body.style.backgroundImage = `url('${src}')`;  
-          } catch { /* ignore */ }
-          // Load the image for canvas rendering
-          const img = new Image();
-          img.src = src;
-          img.onload = () => {
-            bgImageRef.current = img;
-            try {
-              const c = document.createElement('canvas');
-              c.width = img.naturalWidth; c.height = img.naturalHeight;
-              const cx = c.getContext('2d');
-              if (cx) {
-                cx.drawImage(img, 0, 0);
-                bgImageDataRef.current = cx.getImageData(0, 0, c.width, c.height);
-              }
-              bgRawCanvasRef.current = c;
-            } catch { /* ignore */ }
-          };
-        } else {
-          try { document.body.style.backgroundImage = 'none'; } catch { /* ignore */ }
-        }
-      } catch {
-        // If discovery fails, clear background
-        try { document.body.style.backgroundImage = 'none'; } catch { /* ignore */ }
-      }
-    }
-    if (alienMusicControlRef.current) {
-      alienMusicControlRef.current.stop();
-      alienMusicControlRef.current = null;
-    }
-    // Restart intro zoom timeline
-    introZoomStartRef.current = performance.now();
-    gameStateRef.current = {
-      player: createPlayer(),
-      bullets: [],
-      alienBullets: [],
-      playerMissiles: [],
-      asteroids: [],
-      alienShips: [],
-      bonuses: [],
-      explosions: [],
-      missilePopups: [],
-      score: 0,
-      stage: 1,
-      gameRunning: true,
-      gameStarted: true,
-      keys: {},
-      stageStartTime: Date.now(),
-      stageWaitTime: 5000, // 5 seconds
-      alienSpawnCount: 0,
-      levelComplete: false,
-      warpEffect: 0,
-      alienApproachMusicPlayed: false,
-      asteroidsSpawned: false,
-      lastBonusSpawn: Date.now(),
-      healEffect: 0,
-      introPhase: 'ship-entrance',
-      introTimer: 0,
-      shipScale: 1,
-      shipIntroPosition: { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 },
-      // Lives depend on difficulty; read via ref to keep initGame stable
-      lives: (difficultyRef.current === 'easy') ? 5 : 3,
-      respawning: false,
-      respawnCountdown: 0,
-      refuelStation: null,
-      rewardShip: null,
-      worldTileX: 0,
-      worldTileY: 0,
-    } as unknown as GameState;
-    // Initial spawn invulnerability & shield for 3 seconds
-    gameStateRef.current.player.position = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
-    gameStateRef.current.player.velocity = { x: 0, y: 0 };
-    gameStateRef.current.player.invulnerable = 180;
-    gameStateRef.current.player.shieldTime = 180;
-
-    // Note: Level 1 triple-shooter is handled in the shooting logic to avoid speed penalties.
-
-    // Place a refuel station far off-screen (several tiles away)
-    {
-      const dxTiles = (Math.random() < 0.5 ? -1 : 1) * (5 + Math.floor(Math.random() * 4)); // 5..8 tiles
-      const dyTiles = (Math.random() < 0.5 ? -1 : 1) * (4 + Math.floor(Math.random() * 4)); // 4..7 tiles
-      const localX = Math.random() * CANVAS_WIDTH;
-      const localY = Math.random() * CANVAS_HEIGHT;
-      gameStateRef.current.refuelStation = { tileX: dxTiles, tileY: dyTiles, position: { x: localX, y: localY } };
-    }
-
-    // Spawn a reward ship off-screen as well (tiles)
-    {
-      const dxTiles = (Math.random() < 0.5 ? -1 : 1) * (1 + Math.floor(Math.random() * 3)); // 1..3 tiles
-      const dyTiles = (Math.random() < 0.5 ? -1 : 1) * (1 + Math.floor(Math.random() * 3)); // 1..3 tiles
-      const localX = Math.random() * CANVAS_WIDTH;
-      const localY = Math.random() * CANVAS_HEIGHT;
-      gameStateRef.current.rewardShip = { tileX: dxTiles, tileY: dyTiles, position: { x: localX, y: localY } };
-    }
+    // Reset game over state for fresh start
+    gameOverStartRef.current = null;
     
-    setScore(0);
-    setGameRunning(true);
-    setGameStarted(true);
-    // Health reset implicit via createPlayer(); UI reads from player
-    setStage(1);
+    // Reset current game tickets for new game
+    resetCurrentGameTickets();
+
+    const spawnW = (canvasRef.current?.width ?? CANVAS_WIDTH);
+    const spawnH = (canvasRef.current?.height ?? CANVAS_HEIGHT);
+
+    initGameMod({
+      CANVAS_WIDTH,
+      CANVAS_HEIGHT,
+      spawnW,
+      spawnH,
+      difficultyRef,
+      backdropsRef,
+      setBackdrops,
+      setBackdropIndex,
+      bgImageRef,
+      bgRawCanvasRef,
+      bgImageDataRef,
+      starsRef,
+      initialAreaRef,
+      initialStarCountRef,
+      introZoomStartRef,
+      gameStateRef: gameStateRef as any,
+      setScore,
+      setGameRunning,
+      setGameStarted,
+      setStage,
+      WORLD_GRID_SIZE,
+      createPlayer,
+      regenerateStars,
+      createRefuelStation,
+      createRewardShip,
+      devLogSpawns,
+      DEV_MODE: __DEV_MODE__,
+    });
     lastIntroStepRef.current = 0;
   }, []);
 
@@ -1486,48 +984,9 @@ const Game: React.FC = () => {
     if (gameStateRef.current && !gameStateRef.current.gameRunning) {
       initGame();
     }
-    // Auto-start background music on first user interaction to satisfy autoplay policies
-    try {
-      if (!musicAutoStartedRef.current) {
-        const tracks = soundSystem.getMusicTracks();
-        if (tracks && tracks.length > 0) {
-          // Keep currently selected index; if out of range, clamp to 0
-          const idx = Math.max(0, Math.min(musicIndex, tracks.length - 1));
-          setMusicIndex(idx);
-          if (!isMuted) {
-            // Clear any pre-queued song-title overlays
-            titleOverlaysRef.current = titleOverlaysRef.current.filter(o => !o.text.startsWith('♪'));
-            // Suppress listener-driven enqueues for ~2.5s and enqueue manually after 2s
-            suppressTitleUntilRef.current = performance.now() + 2500;
-            safePlayMusic(idx);
-            window.setTimeout(() => {
-              const ms = soundSystem.getMusicState();
-              if (!ms.isPlaying) return;
-              const list = soundSystem.getMusicTracks();
-              const t = list?.[ms.index];
-              if (!t) return;
-              const formatted = formatTrackName(t.name);
-              if (!formatted) return;
-              // Avoid duplicate same-title if already present recently
-              const now3 = performance.now();
-              const txt = `♪ ${formatted}`;
-              const dup = titleOverlaysRef.current.some(o => o.text === txt && (now3 - o.start) < 4000);
-              if (!dup) {
-                titleOverlaysRef.current.push({ id: nextTitleIdRef.current++, text: txt, start: now3 });
-                // Prime dedupe guard so a subsequent listener notify won't enqueue again immediately
-                lastTitleInfoRef.current = { index: ms.index, ts: now3 };
-              }
-            }, 2000);
-          } else {
-            // If muted, just select track without playing to keep index in sync
-            soundSystem.selectMusicTrack(idx);
-          }
-          musicAutoStartedRef.current = true;
-        }
-      }
-    } catch { /* ignore */ }
-    // Otherwise this primes audio context
-  }, [initGame, isMuted, musicIndex, formatTrackName]);
+  }, [initGame]);
+
+  // (mount-only init moved into useLayoutEffect after initial fit)
 
   // Load music tracks initially (safe-only by default)
   useEffect(() => {
@@ -1559,31 +1018,139 @@ const Game: React.FC = () => {
 
   // startGame removed; game auto-start remains unchanged by initGame() usage elsewhere
 
-  // Input handling
+  // Install periodic/visibility/unload persistence for music resume (every 3s; same guards)
   useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-    };
-  }, [handleKeyDown, handleKeyUp]);
+    const cleanup = installMusicResumePersistence({
+      soundSystem,
+      key: MUSIC_RESUME_KEY,
+      setMusicIndex,
+      resumeInfoRef,
+      saveResumeInfo,
+    });
+    return cleanup;
+  }, []);
 
-  // Dev-only: hotkey to push a manual debug line into DebugPanel
+  // Dev-only: hotkeys for summary (` or D) and tile dump (T)
   useEffect(() => {
-    if (!__DEV_MODE__) return;
-    const onDevKey = (e: KeyboardEvent) => {
-      // Backtick ` or 'd' key will dump a quick summary line
-      if (e.key === '`' || e.key === 'd' || e.key === 'D') {
-        const gs = gameStateRef.current;
-        const tractorPhase = (gs as unknown as { tractorBeam?: { phase?: string } })?.tractorBeam?.phase ?? 'idle';
-        const bg = (gs as unknown as { bgBrightness?: number })?.bgBrightness ?? 0.4;
-        const summary = `[manual] f=${__frameCounter} ast=${gs?.asteroids?.length ?? 0} bul=${gs?.bullets?.length ?? 0} deb=${gs?.visualDebris?.length ?? 0} exp=${gs?.explosions?.length ?? 0} phase=${tractorPhase} bg=${bg}`;
-        const arr = debugLinesRef.current; arr.push(summary); if (arr.length > 200) arr.splice(0, arr.length - 200);
+    const cleanup = installDevHotkeys({
+      getGameState: () => gameStateRef.current,
+      appendDebugLine: (s) => {
+        const arr = debugLinesRef.current;
+        arr.push(s);
+        if (arr.length > 200) arr.splice(0, arr.length - 200);
+      },
+      getFrameCounter: () => __frameCounter,
+    });
+    return cleanup;
+  }, []);
+
+  // Touch control handlers for mobile
+  const handleJoystickMove = useCallback((angle: number | null, distance: number) => {
+    if (angle !== null) {
+      touchRotationRef.current = angle;
+      touchThrustRef.current = distance;
+      
+      // Apply rotation to player
+      const gs = gameStateRef.current;
+      if (gs && gs.player) {
+        gs.player.rotation = angle;
+        
+        // Apply thrust if distance > threshold
+        if (distance > 0.2) {
+          gs.keys['ArrowUp'] = true;
+          gs.keys['w'] = true;
+        } else {
+          delete gs.keys['ArrowUp'];
+          delete gs.keys['w'];
+        }
       }
+    } else {
+      touchRotationRef.current = null;
+      touchThrustRef.current = 0;
+      
+      // Release thrust
+      const gs = gameStateRef.current;
+      if (gs) {
+        delete gs.keys['ArrowUp'];
+        delete gs.keys['w'];
+      }
+    }
+  }, []);
+
+  const handleTouchFire = useCallback((active: boolean) => {
+    touchFireActiveRef.current = active;
+    
+    const gs = gameStateRef.current;
+    if (!gs || !gs.player) return;
+    
+    if (active) {
+      // Simulate spacebar press
+      gs.keys[' '] = true;
+      
+      // Fire bullet using same logic as keyboard
+      if (gs.stage === 1) {
+        const spread = 0.10;
+        gs.bullets.push(createBullet(gs.player.position, gs.player.rotation));
+        gs.bullets.push(createBullet(gs.player.position, gs.player.rotation - spread));
+        gs.bullets.push(createBullet(gs.player.position, gs.player.rotation + spread));
+      } else {
+        const stacks = gs.player.doubleShooterStacks || 0;
+        if (gs.player.doubleShooter > 0 && stacks >= 2) {
+          const spread = 0.12;
+          const angles = [
+            gs.player.rotation - spread * 1.5,
+            gs.player.rotation - spread * 0.5,
+            gs.player.rotation + spread * 0.5,
+            gs.player.rotation + spread * 1.5,
+          ];
+          for (const a of angles) gs.bullets.push(createBullet(gs.player.position, a));
+        } else if (gs.player.doubleShooter > 0 && stacks >= 1) {
+          const spread = 0.12;
+          gs.bullets.push(createBullet(gs.player.position, gs.player.rotation - spread));
+          gs.bullets.push(createBullet(gs.player.position, gs.player.rotation + spread));
+        } else {
+          gs.bullets.push(createBullet(gs.player.position, gs.player.rotation));
+        }
+      }
+      soundSystem.playPlayerShoot();
+    } else {
+      delete gs.keys[' '];
+    }
+  }, []);
+
+  const handleTouchMissile = useCallback(() => {
+    const gs = gameStateRef.current;
+    if (!gs) return;
+    
+    // Simulate Enter key press for missile
+    gs.keys['Enter'] = true;
+    setTimeout(() => {
+      if (gs) delete gs.keys['Enter'];
+    }, 100);
+  }, []);
+
+  const handleTouchDash = useCallback((direction: 'forward' | 'backward' | 'left' | 'right') => {
+    const gs = gameStateRef.current;
+    if (!gs || !gs.player) return;
+    
+    // Simulate double-tap for dash
+    const keyMap = {
+      forward: 'w',
+      backward: 's',
+      left: 'a',
+      right: 'd',
     };
-    window.addEventListener('keydown', onDevKey);
-    return () => { window.removeEventListener('keydown', onDevKey); };
+    
+    const key = keyMap[direction];
+    
+    // Trigger dash by simulating double-tap
+    gs.keys[key] = true;
+    setTimeout(() => {
+      if (gs) gs.keys[key] = true;
+    }, 50);
+    setTimeout(() => {
+      if (gs) delete gs.keys[key];
+    }, 150);
   }, []);
 
   // Difficulty settings helper
@@ -1622,1257 +1189,23 @@ const Game: React.FC = () => {
     } as const;
   }, [difficulty]);
 
-  // Function to create asteroids for a specific stage with difficulty applied
-  const createStageAsteroids = (stageNumber: number): Asteroid[] => {
-    const asteroids: Asteroid[] = [];
-    const settings = getDifficultySettings();
-    
-    if (stageNumber === 1) {
-      // Stage 1: Start with 4 large asteroids
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-    } else if (stageNumber === 2) {
-      // Stage 2: Current difficulty
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('medium', undefined, stageNumber));
-      asteroids.push(createAsteroid('medium', undefined, stageNumber));
-    } else if (stageNumber === 3) {
-      // Stage 3: More asteroids, faster
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('large', undefined, stageNumber));
-      asteroids.push(createAsteroid('medium', undefined, stageNumber));
-      asteroids.push(createAsteroid('medium', undefined, stageNumber));
-      asteroids.push(createAsteroid('medium', undefined, stageNumber));
-    } else {
-      // Stage 4+: Even more asteroids
-      const largeCount = Math.min(3 + stageNumber, 8); // Cap at 8 large asteroids
-      const mediumCount = Math.min(2 + stageNumber, 6); // Cap at 6 medium asteroids
-      
-      for (let i = 0; i < largeCount; i++) {
-        asteroids.push(createAsteroid('large', undefined, stageNumber));
-      }
-      for (let i = 0; i < mediumCount; i++) {
-        asteroids.push(createAsteroid('medium', undefined, stageNumber));
-      }
-    }
-
-    // Apply asteroid count delta (ensure non-negative length)
-    if (settings.asteroidCountDelta < 0) {
-      for (let i = 0; i < Math.abs(settings.asteroidCountDelta); i++) {
-        if (asteroids.length > 0) asteroids.pop();
-      }
-    } else if (settings.asteroidCountDelta > 0) {
-      for (let i = 0; i < settings.asteroidCountDelta; i++) {
-        asteroids.push(createAsteroid('medium', undefined, stageNumber));
-      }
-    }
-
-    // Apply speed multiplier
-    if (settings.speedMultiplier !== 1) {
-      for (const a of asteroids) {
-        a.velocity = multiplyVector(a.velocity, settings.speedMultiplier);
-      }
-    }
-    // Choose one large asteroid to be special: triple health, ominous look, special spawn
-    const largeIndices = asteroids
-      .map((a, idx) => ({ a, idx }))
-      .filter(({ a }) => a.size === 'large')
-      .map(({ idx }) => idx);
-    if (largeIndices.length > 0) {
-      const pick = largeIndices[Math.floor(Math.random() * largeIndices.length)];
-      const special = asteroids[pick];
-      special.special = true;
-      special.glowColor = Math.random() < 0.5 ? 'green' : 'red';
-      special.specialSpawn = Math.random() < 0.5 ? 'bonus' : 'alien';
-      // Generate and lock the Flipit chance for this asteroid (1% to 10%)
-      special.flipitChance = 0.01 + Math.random() * 0.09;
-      // Triple health for the special rock
-      special.health = special.maxHealth * 3;
-      special.maxHealth = special.health;
-    }
-    return asteroids;
-  };
-
-  // Map ship look to health percentage (0-100): 0-20 => T1, 20-40 => T2, 40-60 => T3, 60-80 => T4, 80-100 => T5
-  const computeHealthTier = (health: number, maxHealth: number): number => {
-    const pct = maxHealth > 0 ? Math.max(0, Math.min(100, (health / maxHealth) * 100)) : 0;
-    if (pct >= 80) return 5;
-    if (pct >= 60) return 4;
-    if (pct >= 40) return 3;
-    if (pct >= 20) return 2;
-    return 1;
-  };
-
-  // Draw functions
-  const drawPlayer = (ctx: CanvasRenderingContext2D, gameState: GameState) => {
-    const { player } = gameState;
-    // Determine current visible tier: show intro tiers during intro, else by health
-    let visibleTier = computeHealthTier(player.health, player.maxHealth);
-    if (gameState.introPhase === 'ship-entrance') {
-      // Timeline: 0-1.0s => 5, 1.0-1.5s => 4, 1.5-2.0s => 3, 2.0-2.5s => 2, then normal
-      const t = gameState.introTimer / 1000;
-      if (t < 1.0) visibleTier = 5; else if (t < 1.5) visibleTier = 4; else if (t < 2.0) visibleTier = 3; else if (t < 2.5) visibleTier = 2;
-      let step = 0; if (t < 1.0) step = 5; else if (t < 1.5) step = 4; else if (t < 2.0) step = 3; else if (t < 2.5) step = 2; else step = 1;
-      if (step !== lastIntroStepRef.current) {
-        if (step <= 4 && step >= 1) soundSystem.playTierChangeCue();
-        lastIntroStepRef.current = step;
-      }
-    } else if (gameState.introPhase === 'health-fill') {
-      // During health fill, tier reflects the rising health
-      visibleTier = computeHealthTier(player.health, player.maxHealth);
-    }
-
-    // Draw shield effect first (behind player)
-    if (player.shieldTime > 0) {
-      ctx.save();
-      ctx.translate(player.position.x, player.position.y);
-      
-      // Shield glow effect
-      const shieldAlpha = player.shieldTime < 60 ? (player.shieldTime / 60) * 0.6 : 0.6; // Fade in last second
-      const time = Date.now() * 0.005;
-      const pulseIntensity = 0.8 + Math.sin(time) * 0.2;
-      
-      // Outer glow
-      ctx.fillStyle = `rgba(0, 170, 255, ${shieldAlpha * 0.3 * pulseIntensity})`;
-      ctx.beginPath();
-      ctx.arc(0, 0, 35, 0, 2 * Math.PI);
-      ctx.fill();
-      
-      // Shield hexagon
-      ctx.strokeStyle = `rgba(0, 200, 255, ${shieldAlpha * pulseIntensity})`;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const angle = (i / 6) * 2 * Math.PI + time * 0.5; // Slow rotation
-        const x = Math.cos(angle) * 25;
-        const y = Math.sin(angle) * 25;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.closePath();
-      ctx.stroke();
-      
-      // Inner energy pattern
-      ctx.strokeStyle = `rgba(255, 255, 255, ${shieldAlpha * 0.8 * pulseIntensity})`;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const angle = (i / 6) * 2 * Math.PI - time * 0.3; // Counter rotation
-        const x = Math.cos(angle) * 18;
-        const y = Math.sin(angle) * 18;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.closePath();
-      ctx.stroke();
-      
-      ctx.restore();
-    }
-    
-    ctx.save();
-    // Apply intro drop-in: scale 1.6->1.0 and slide -40px->0 over 2.5s
-    let scale = 1;
-    let offsetY = 0;
-    if (gameState.introPhase === 'ship-entrance') {
-      const t = Math.min(2500, gameState.introTimer);
-      const k = 1 - (t / 2500);
-      scale = 1.0 + k * 0.6;
-      offsetY = -40 * k;
-    }
-    ctx.translate(player.position.x, player.position.y + offsetY);
-    // Dim ship during behind-entry occlusion
-    if (tractionBeamRef.current?._occludeShip) {
-      ctx.globalAlpha *= 0.5;
-    }
-    ctx.rotate(player.rotation);
-    ctx.scale(scale, scale);
-
-    // Draw ship per tier
-    const isFlashing = player.invulnerable > 0 && Math.floor(player.invulnerable / 5) % 2 === 0;
-    const baseStroke = isFlashing ? '#ff0000' : '#00ffff';
-
-    const drawTier1 = () => {
-      ctx.strokeStyle = baseStroke;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(15, 0);
-      ctx.lineTo(-10, -8);
-      ctx.lineTo(-5, 0);
-      ctx.lineTo(-10, 8);
-      ctx.closePath();
-      ctx.stroke();
-    };
-
-    const drawTier2 = () => {
-      ctx.strokeStyle = '#7ffcff';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.moveTo(15, 0);
-      ctx.lineTo(-10, -8);
-      ctx.lineTo(-5, 0);
-      ctx.lineTo(-10, 8);
-      ctx.closePath();
-      ctx.stroke();
-    };
-
-    const drawTier3 = () => {
-      const time = Date.now() * 0.0006;
-      const hue = Math.floor((time * 60) % 360);
-      ctx.fillStyle = `hsl(${hue}, 80%, 55%)`;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(15, 0);
-      ctx.lineTo(-10, -8);
-      ctx.lineTo(-5, 0);
-      ctx.lineTo(-10, 8);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    };
-
-    const drawTier4 = () => {
-      const time = Date.now() * 0.0006;
-      const hue = Math.floor((time * 60) % 360);
-      ctx.fillStyle = `hsl(${hue}, 80%, 55%)`;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      // body
-      ctx.beginPath();
-      ctx.moveTo(15, 0);
-      ctx.lineTo(-10, -8);
-      ctx.lineTo(-5, 0);
-      ctx.lineTo(-10, 8);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      // side turrets
-      ctx.fillStyle = '#cccccc';
-      ctx.strokeStyle = '#999999';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.rect(-6, -10, 4, 6); ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.rect(-6, 4, 4, 6); ctx.fill(); ctx.stroke();
-      // barrels
-      ctx.strokeStyle = '#dddddd';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-2, -7); ctx.lineTo(8, -7);
-      ctx.moveTo(-2, 7); ctx.lineTo(8, 7);
-      ctx.stroke();
-    };
-
-    const drawTier5 = () => {
-      // Procedural detailed ship, centered around (0,0)
-      // Apply a tiny alignment tweak so visual centroid matches bullet origin
-      ctx.save();
-      ctx.translate(-2, 0); // slight left shift to center mass
-      ctx.fillStyle = '#88e0ff';
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(18, 0);
-      ctx.lineTo(2, -10);
-      ctx.lineTo(-12, -6);
-      ctx.lineTo(-6, 0);
-      ctx.lineTo(-12, 6);
-      ctx.lineTo(2, 10);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      // canopy
-      ctx.fillStyle = '#1b2a41';
-      ctx.beginPath();
-      ctx.ellipse(4, 0, 6, 4, 0, 0, 2 * Math.PI);
-      ctx.fill();
-      // fins
-      ctx.fillStyle = '#66d0ff';
-      ctx.beginPath(); ctx.moveTo(-8, -9); ctx.lineTo(-2, -4); ctx.lineTo(-12, -2); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(-8, 9);  ctx.lineTo(-2, 4);  ctx.lineTo(-12, 2);  ctx.closePath(); ctx.fill();
-      // nose detail
-      ctx.strokeStyle = '#dff6ff';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(17, 0); ctx.stroke();
-      ctx.restore();
-    };
-
-    switch (visibleTier) {
-      case 1: drawTier1(); break;
-      case 2: drawTier2(); break;
-      case 3: drawTier3(); break;
-      case 4: drawTier4(); break;
-      case 5: drawTier5(); break;
-      default: drawTier1();
-    }
-    
-    // Draw thrust
-    if (player.thrust > 0) {
-      ctx.strokeStyle = '#ff6600';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-5, 0);
-      ctx.lineTo(-15, -3);
-      ctx.lineTo(-12, 0);
-      ctx.lineTo(-15, 3);
-      ctx.closePath();
-      ctx.stroke();
-    }
-    
-    ctx.restore();
-  };
-
-  const drawBullets = (ctx: CanvasRenderingContext2D, bullets: Bullet[]) => {
-    ctx.fillStyle = '#ffff00';
-    bullets.forEach(bullet => {
-      ctx.beginPath();
-      ctx.arc(bullet.position.x, bullet.position.y, bullet.radius, 0, 2 * Math.PI);
-      ctx.fill();
-    });
-  };
-  const drawAlienShips = (ctx: CanvasRenderingContext2D, alienShips: AlienShip[]) => {
-    alienShips.forEach(ship => {
-      ctx.save();
-      // Doom sequence visuals for missile-type
-      const missileType = !!ship.isMissileType;
-      const doomStage = (ship as AlienShip).doomStage || 0;
-      const doomTimer = (ship as AlienShip).doomTimer || 0;
-      // Vibrate jitter during stage 2
-      let jitterX = 0, jitterY = 0;
-      if (missileType && doomStage === 2) {
-        jitterX = (Math.random() - 0.5) * 6;
-        jitterY = (Math.random() - 0.5) * 6;
-      }
-      ctx.translate(ship.position.x + jitterX, ship.position.y + jitterY);
-      // Shrink during stage 3
-      let baseScale = missileType ? 2.0 : 1.0;
-      if (missileType && doomStage === 3) {
-        const t = Math.max(0.05, (doomTimer || 1) / 60);
-        baseScale *= t;
-      }
-      const scale = baseScale;
-      ctx.scale(scale, scale);
-
-      // Saucer body
-      // Disable heavy shadow glows to avoid large-area wash; shading remains via fills/strokes
-      if (missileType && doomStage === 2) {
-        ctx.shadowColor = '#ff6b3a';
-        ctx.shadowBlur = 0;
-      } else if (missileType && doomStage === 3) {
-        ctx.shadowColor = '#ffd8b0';
-        ctx.shadowBlur = 0;
-      } else {
-        ctx.shadowBlur = 0;
-      }
-      ctx.fillStyle = missileType ? '#222326' : '#444444';
-      ctx.strokeStyle = missileType ? '#ff6b3a' : '#666666';
-      ctx.lineWidth = missileType ? 2.5 : 2;
-      ctx.beginPath();
-      ctx.ellipse(0, 2, 20, 8, 0, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
-
-      // Top dome (pulse for missile type)
-      const pulse = missileType ? (0.85 + 0.15 * Math.sin(Date.now() * 0.006)) : 1;
-      ctx.fillStyle = missileType ? `rgba(255,120,60,${0.5 * pulse})` : '#555555';
-      ctx.strokeStyle = missileType ? '#ffb46b' : '#777777';
-      ctx.lineWidth = missileType ? 1.8 : 1.5;
-      ctx.beginPath();
-      ctx.ellipse(0, -6, 10, 6, 0, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.stroke();
-
-      // Lower orb/glow
-      ctx.fillStyle = missileType ? (doomStage >= 2 ? 'rgba(255, 68, 68, 0.7)' : 'rgba(255, 68, 68, 0.4)') : 'rgba(255,255,255,0.15)';
-      ctx.beginPath();
-      ctx.arc(0, 8, 6, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.restore();
-
-      // Health bar above ship (scale width by scale)
-      const healthPercentage = ship.health / ship.maxHealth;
-      const barWidth = 20 * scale;
-      const barHeight = 3;
-      ctx.fillStyle = '#333333';
-      ctx.fillRect(ship.position.x - barWidth / 2, ship.position.y - ship.radius - 10, barWidth, barHeight);
-      ctx.fillStyle = healthPercentage > 0.5 ? '#00ff00' : '#ff0000';
-      ctx.fillRect(
-        ship.position.x - barWidth / 2,
-        ship.position.y - ship.radius - 10,
-        barWidth * healthPercentage,
-        barHeight
-      );
-    });
-  };
   
 
-  const drawExplosions = (ctx: CanvasRenderingContext2D, explosions: Explosion[]) => {
-    explosions.forEach(explosion => {
-      explosion.particles.forEach(particle => {
-        ctx.save();
-        // Cap alpha to prevent additive white-out when many particles overlap
-        const baseA = 1 - (particle.life / particle.maxLife);
-        ctx.globalAlpha = Math.min(0.35, baseA);
-        ctx.fillStyle = particle.color;
-        
-        // Draw particles with varying sizes
-        const currentSize = particle.size * (1 - (particle.life / particle.maxLife) * 0.5); // Shrink over time
-        ctx.fillRect(
-          particle.position.x - currentSize/2, 
-          particle.position.y - currentSize/2, 
-          currentSize, 
-          currentSize
-        );
-        ctx.restore();
-      });
-    });
-  };
-
-  const drawBonuses = (ctx: CanvasRenderingContext2D, bonuses: Bonus[]) => {
-  bonuses.forEach(bonus => {
-    ctx.save();
-    ctx.translate(bonus.position.x, bonus.position.y);
-    
-    if (bonus.type === 'shield') {
-        // Draw shield bonus - blue glowing hexagon with shield symbol
-        const time = Date.now() * 0.003;
-        const glowIntensity = 0.7 + Math.sin(time) * 0.3;
-        
-        // Outer glow
-        ctx.fillStyle = `rgba(0, 150, 255, ${glowIntensity * 0.3})`;
-        ctx.beginPath();
-        for (let i = 0; i < 6; i++) {
-          const angle = (i / 6) * 2 * Math.PI;
-          const x = Math.cos(angle) * 30;
-          const y = Math.sin(angle) * 30;
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        ctx.closePath();
-        ctx.fill();
-        
-        // Core hexagon
-        ctx.fillStyle = 'rgba(0, 120, 255, 0.9)';
-        ctx.strokeStyle = 'rgba(200, 230, 255, 0.9)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        for (let i = 0; i < 6; i++) {
-          const angle = (i / 6) * 2 * Math.PI;
-          const x = Math.cos(angle) * 20;
-          const y = Math.sin(angle) * 20;
-          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        
-        // Shield emblem
-        ctx.fillStyle = '#e6f7ff';
-        ctx.beginPath();
-        ctx.moveTo(0, -8);
-        ctx.lineTo(8, -2);
-        ctx.lineTo(6, 8);
-        ctx.lineTo(-6, 8);
-        ctx.lineTo(-8, -2);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        // muzzle flashes
-        ctx.fillStyle = '#ffff66';
-        ctx.beginPath(); ctx.arc(10, 0, 3, 0, 2 * Math.PI); ctx.fill();
-        ctx.beginPath(); ctx.arc(-10, 0, 3, 0, 2 * Math.PI); ctx.fill();
-      } else if (bonus.type === 'missile') {
-      // Missile bonus: larger white missile icon with glow
-      const time = Date.now() * 0.004;
-      const pulse = 0.6 + 0.4 * Math.sin(time);
-      ctx.shadowColor = '#ffffff';
-      ctx.shadowBlur = 16 * pulse;
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = 'rgba(255,255,255,0.8)';
-      ctx.lineWidth = 2;
-      // Draw a simple missile body
-      ctx.save();
-      ctx.rotate((Math.PI / 8) * Math.sin(time * 0.4));
-      // nose
-      ctx.beginPath();
-      ctx.moveTo(18, 0);
-      ctx.lineTo(-10, -6);
-      ctx.lineTo(-10, 6);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      // fins
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      ctx.beginPath(); ctx.moveTo(-6, -8); ctx.lineTo(-12, -2); ctx.lineTo(-4, -2); ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(-6, 8); ctx.lineTo(-12, 2); ctx.lineTo(-4, 2); ctx.closePath(); ctx.fill();
-      // small trail puff
-      ctx.fillStyle = 'rgba(255,255,255,0.4)';
-      ctx.beginPath(); ctx.arc(-14, 0, 4 + 2 * pulse, 0, 2 * Math.PI); ctx.fill();
-      ctx.restore();
-    } else {
-      // unknown: no-op
-    }
-    
-    ctx.restore();
-  });
-};
-  const drawAsteroids = (ctx: CanvasRenderingContext2D, gameState: GameState) => {
-    gameState.asteroids.forEach(asteroid => {
-      ctx.save();
-      ctx.translate(asteroid.position.x, asteroid.position.y);
-      ctx.rotate(asteroid.rotation);
-      // Detailed procedural asteroid with cached irregular shape, shading and craters
-      const r = asteroid.radius;
-      const anyAst = asteroid as Asteroid & { shapePoints?: Array<{x:number,y:number}>; baseFill?: string; strokeColor?: string; craters?: Array<{x:number,y:number,r:number}> };
-      if (!anyAst.shapePoints) {
-        const points = 14; // richer silhouette
-        const arr: Array<{x:number,y:number}> = [];
-        // Create stable random-ish offsets using a deterministic function of index and radius
-        const jitter = (i: number) => {
-          // pseudo-random in [-0.2,0.2]
-          const s = Math.sin(i * 12.9898 + r * 78.233) * 43758.5453;
-          return (s - Math.floor(s)) * 0.4 - 0.2;
-        };
-        for (let i = 0; i < points; i++) {
-          const ang = (i / points) * Math.PI * 2;
-          const rr = r * (0.85 + jitter(i));
-          arr.push({ x: Math.cos(ang) * rr, y: Math.sin(ang) * rr });
-        }
-        anyAst.shapePoints = arr;
-      }
-      // Body fill
-      ctx.beginPath();
-      anyAst.shapePoints.forEach((p: {x:number,y:number}, i: number) => {
-        if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-      });
-      ctx.closePath();
-      // Determine special "crystallized black glass" large asteroid vs regular
-      const isCrystal = asteroid.size === 'large' && !!asteroid.special;
-      // We no longer make all large asteroids metallic; only the special one is crystalline
-      // Base color: special crystal uses near-black; others use darker randomized gray (cached)
-      if (!anyAst.baseFill) {
-        if (isCrystal) {
-          // Deep almost-black with a cold tint
-          anyAst.baseFill = '#0b0d11';
-          anyAst.strokeColor = '#1a1f29';
-        } else {
-          // Deterministic pseudo-random in 0..1
-          const seed = asteroid.position.x * 0.131 + asteroid.position.y * 0.173 + r * 0.219;
-          const n = Math.sin(seed * 12.9898) * 43758.5453;
-          const t = n - Math.floor(n);
-          const veryDark = t < 0.3; // ~30% are much darker
-          let gray: number;
-          if (asteroid.size === 'large') {
-            // Large regular: rock-like but darker
-            gray = 45 + Math.floor(t * 35); // 45..80
-          } else if (veryDark) {
-            gray = 55 + Math.floor(t * 30); // 55..85
-          } else {
-            gray = 80 + Math.floor(t * 40); // 80..120
-          }
-          const hex = gray.toString(16).padStart(2, '0');
-          anyAst.baseFill = `#${hex}${hex}${hex}`;
-          const strokeG = Math.min(255, gray + 35);
-          anyAst.strokeColor = `#${strokeG.toString(16).padStart(2, '0').repeat(3)}`;
-        }
-      }
-      ctx.fillStyle = anyAst.baseFill;
-      ctx.fill();
-      // Edge stroke
-      ctx.strokeStyle = anyAst.strokeColor || '#b5b5b5';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      
-      // Lighting: soft rim light on top-left
-      {
-        const grad = ctx.createRadialGradient(-r * 0.4, -r * 0.4, r * 0.2, 0, 0, r * 1.2);
-        grad.addColorStop(0, isCrystal ? 'rgba(180,210,255,0.30)' : 'rgba(255,255,255,0.22)');
-        grad.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = grad;
-        ctx.beginPath();
-        anyAst.shapePoints.forEach((p: {x:number,y:number}, i: number) => {
-          if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-        });
-        ctx.closePath();
-        ctx.fill();
-      }
-
-      // Additional 3D shading for regular (non-crystal) asteroids: directional shadow + subtle highlight
-      if (!isCrystal) {
-        // Directional shadow from top-left to bottom-right
-        const lg = ctx.createLinearGradient(-r, -r, r, r);
-        lg.addColorStop(0.55, 'rgba(0,0,0,0)');
-        lg.addColorStop(1.0, 'rgba(0,0,0,0.28)');
-        ctx.fillStyle = lg;
-        ctx.beginPath();
-        anyAst.shapePoints.forEach((p: {x:number,y:number}, i: number) => {
-          if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-        });
-        ctx.closePath();
-        ctx.fill();
-
-        // Soft highlight towards the light direction (top-left)
-        const hg = ctx.createRadialGradient(-r * 0.5, -r * 0.5, r * 0.1, -r * 0.2, -r * 0.2, r * 0.9);
-        hg.addColorStop(0, 'rgba(255,255,255,0.08)');
-        hg.addColorStop(1, 'rgba(255,255,255,0)');
-        ctx.fillStyle = hg;
-        ctx.beginPath();
-        anyAst.shapePoints.forEach((p: {x:number,y:number}, i: number) => {
-          if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-        });
-        ctx.closePath();
-        ctx.fill();
-      }
-      
-      // Crystalline reflective look for the special large asteroid
-      if (isCrystal) {
-        ctx.save();
-        // Facet lines: faint cool strokes from edges toward center
-        ctx.globalAlpha = 0.22;
-        ctx.strokeStyle = 'rgba(160,200,255,0.45)';
-        ctx.lineWidth = 1.2;
-        for (let i = 0; i < anyAst.shapePoints.length; i += 2) {
-          const p = anyAst.shapePoints[i];
-          ctx.beginPath();
-          ctx.moveTo(p.x, p.y);
-          ctx.lineTo(p.x * 0.3, p.y * 0.3);
-          ctx.stroke();
-        }
-        // Sharp specular streaks
-        ctx.globalAlpha = 0.5;
-        ctx.strokeStyle = 'rgba(200,230,255,0.95)';
-        ctx.lineWidth = 1.4;
-        const streaks = 4;
-        for (let i = 0; i < streaks; i++) {
-          const ang = -Math.PI / 5 + (i - 1.5) * 0.22;
-          const len = r * (1.0 + i * 0.15);
-          ctx.beginPath();
-          ctx.moveTo(-Math.cos(ang) * len * 0.4, -Math.sin(ang) * len * 0.4);
-          ctx.lineTo(Math.cos(ang) * len * 0.4, Math.sin(ang) * len * 0.4);
-          ctx.stroke();
-        }
-        // Bright glints
-        ctx.globalAlpha = 0.95;
-        ctx.fillStyle = 'rgba(220,240,255,0.98)';
-        for (let i = 0; i < 3; i++) {
-          const gx = (-0.25 + i * 0.22) * r;
-          const gy = (-0.28 + i * 0.18) * r;
-          ctx.beginPath();
-          ctx.arc(gx, gy, Math.max(1.8, r * 0.035), 0, Math.PI * 2);
-          ctx.fill();
-        }
-        // Subtle inner cold glow for glassy depth
-        const core = ctx.createRadialGradient(-r * 0.1, -r * 0.15, 0, 0, 0, r * 1.0);
-        core.addColorStop(0, 'rgba(90,110,140,0.10)');
-        core.addColorStop(1, 'rgba(90,110,140,0)');
-        ctx.globalAlpha = 1.0;
-        ctx.fillStyle = core;
-        ctx.beginPath();
-        anyAst.shapePoints.forEach((p: {x:number,y:number}, i: number) => {
-          if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
-        });
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-      }
-      
-      // Craters: randomized count 1..6, cached for stability
-      const craters = anyAst.craters || (() => {
-        const list: Array<{x:number,y:number,r:number}> = [];
-        let seed = asteroid.position.x * 0.311 + asteroid.position.y * 0.197 + r * 0.421;
-        const rand = () => {
-          const v = Math.sin(seed * 12.9898) * 43758.5453;
-          seed = v;
-          return v - Math.floor(v);
-        };
-        const count = 1 + Math.floor(rand() * 6); // 1..6
-        for (let i = 0; i < count; i++) {
-          const ang = rand() * Math.PI * 2;
-          const rad = rand() * 0.45 + 0.05; // 0.05..0.5 of radius from center
-          const cx = Math.cos(ang) * r * rad * 1.6;
-          const cy = Math.sin(ang) * r * rad * 1.6;
-          const rr = r * (0.06 + rand() * 0.08); // size varies
-          list.push({ x: cx, y: cy, r: rr });
-        }
-        anyAst.craters = list;
-        return list;
-      })();
-      craters.forEach((c: {x:number,y:number,r:number}) => {
-        // dark crater base
-        ctx.fillStyle = 'rgba(0,0,0,0.18)';
-        ctx.beginPath();
-        ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-        ctx.fill();
-        // inner highlight arc
-        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(c.x - c.r * 0.25, c.y - c.r * 0.25, c.r * 0.65, Math.PI * 0.1, Math.PI * 1.1);
-        ctx.stroke();
-      });
-      
-      // Small sparkly highlights
-      ctx.fillStyle = 'rgba(255,255,255,0.15)';
-      for (let i = 0; i < 3; i++) {
-        const ang = i * 2 + 0.6;
-        const rr = r * (0.25 + 0.12 * i);
-        ctx.beginPath();
-        ctx.arc(Math.cos(ang) * rr - r * 0.15, Math.sin(ang) * rr - r * 0.15, r * 0.06, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    });
-  };
   
-  const drawUI = (ctx: CanvasRenderingContext2D, gameState: GameState) => {
-    const now = performance.now();
-    const baseAlpha = 0.5;
-    ctx.save();
-    ctx.globalAlpha = baseAlpha;
-    ctx.fillStyle = (now < scoreDropUntilRef.current) ? '#ff5555' : '#ffffff';
-    ctx.fillText(`Score: ${gameState.score}`, 20, 40);
-    ctx.restore();
 
-  // Stage label, dim
-  ctx.save();
-  ctx.globalAlpha = baseAlpha;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillText(`Stage: ${gameState.stage}`, 20, 70);
-  ctx.restore();
 
-  // Missile counter (top-right): 5 small rocket icons, each represents 5 missiles
-  {
-    const maxRockets = 5;
-    const rocketSize = 12; // smaller rockets
-    const rocketGap = 6; // gap between rockets
-    const x0 = CANVAS_WIDTH - (maxRockets * (rocketSize + rocketGap)) - 20;
-    const y0 = 50; // moved lower
-    
-    // Get missile count and calculate rocket states
-    const pSeg = gameState.player as Player & { missileSegments?: number };
-    const totalMissiles = Math.max(0, pSeg.missileSegments || 0);
-    
-    ctx.save();
-    ctx.globalAlpha = 0.95;
-    
-    for (let r = 0; r < maxRockets; r++) {
-      const x = x0 + r * (rocketSize + rocketGap);
-      const y = y0;
-      
-      // Each rocket represents 5 missiles
-      const missileStart = r * 5;
-      const missilesInThisRocket = Math.max(0, Math.min(5, totalMissiles - missileStart));
-      
-      // Calculate opacity: full bright if 5, dimmer as count decreases
-      const opacity = missilesInThisRocket > 0 ? (0.3 + 0.7 * (missilesInThisRocket / 5)) : 0.1;
-      
-      ctx.save();
-      ctx.globalAlpha = opacity;
-      ctx.translate(x + rocketSize/2, y + rocketSize/2);
-      
-      // Draw small rocket shape
-      ctx.strokeStyle = '#88cfff';
-      ctx.fillStyle = missilesInThisRocket > 0 ? '#cfeeff' : 'rgba(207,238,255,0.2)';
-      ctx.lineWidth = 1;
-      
-      // Simple rocket shape
-      ctx.beginPath();
-      ctx.moveTo(0, -rocketSize/2); // tip
-      ctx.lineTo(-rocketSize/4, rocketSize/4); // left side
-      ctx.lineTo(-rocketSize/6, rocketSize/4); // left fin inner
-      ctx.lineTo(-rocketSize/6, rocketSize/2); // left fin
-      ctx.lineTo(rocketSize/6, rocketSize/2); // right fin
-      ctx.lineTo(rocketSize/6, rocketSize/4); // right fin inner
-      ctx.lineTo(rocketSize/4, rocketSize/4); // right side
-      ctx.closePath();
-      
-      ctx.fill();
-      ctx.stroke();
-      
-      ctx.restore();
-    }
-    ctx.restore();
-  }
 
-  // Fuel meter (bottom-left)
-  {
-    const fuel = gameState.player.fuel ?? 0;
-    const maxFuel = gameState.player.maxFuel ?? 100;
-    const low = gameState.player.fuelLowThreshold ?? Math.floor(maxFuel * 0.25);
-    const crit = gameState.player.fuelCriticalThreshold ?? Math.floor(maxFuel * 0.1);
-    const pct = Math.max(0, Math.min(1, fuel / maxFuel));
-    const x = 20, y = CANVAS_HEIGHT - 40, w = 200, h = 14;
-    // Flashing when low/crit
-    const isCrit = fuel <= crit;
-    const isLow = fuel <= low;
-    const flash = isCrit ? (0.5 + 0.5 * Math.sin(now * 0.02)) : (isLow ? (0.7 + 0.3 * Math.sin(now * 0.015)) : 1.0);
-    ctx.save();
-    // Border
-    ctx.globalAlpha = 0.8;
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(x - 2, y - 2, w + 4, h + 4);
-    // Background
-    ctx.globalAlpha = 0.6;
-    ctx.fillStyle = '#222';
-    ctx.fillRect(x, y, w, h);
-    // Fill
-    const color = isCrit ? `rgba(255,50,50,${flash})` : isLow ? `rgba(255,190,60,${flash})` : 'rgba(80,255,120,0.95)';
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 1.0;
-    ctx.fillRect(x, y, w * pct, h);
-    // Label
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 12px Arial';
-    ctx.textAlign = 'left';
-    ctx.fillText('FUEL', x, y - 6);
-    ctx.restore();
+  
+  
+  
 
-    // Low-fuel beep with rate limiting on threshold crossings
-    let level: 'normal' | 'low' | 'critical' = 'normal';
-    if (fuel <= crit) level = 'critical'; else if (fuel <= low) level = 'low';
-    if (level !== lastFuelWarnLevelRef.current) {
-      // Transition
-      const cooldownMs = 1500;
-      if (now - lastFuelBeepTsRef.current > cooldownMs) {
-        try {
-          const ss = soundSystem as unknown as { playLowFuelBeep?: (lvl: 'critical' | 'low') => void; playUiBeep?: () => void };
-          if (level === 'critical' && typeof ss.playLowFuelBeep === 'function') ss.playLowFuelBeep('critical');
-          else if (level === 'low' && typeof ss.playLowFuelBeep === 'function') ss.playLowFuelBeep('low');
-          else if (typeof ss.playUiBeep === 'function') ss.playUiBeep();
-        } catch { /* ignore */ }
-        lastFuelBeepTsRef.current = now;
-      }
-      lastFuelWarnLevelRef.current = level;
-    }
+  
 
-    // Refueled toast
-    if (fuel >= maxFuel && prevFuelRef.current < maxFuel) {
-      refuelToastUntilRef.current = now + 1200;
-    }
-    prevFuelRef.current = fuel;
-    if (refuelToastUntilRef.current > now) {
-      ctx.save();
-      ctx.globalAlpha = 0.9;
-      ctx.fillStyle = '#c8ffe6';
-      ctx.font = 'bold 14px Arial';
-      ctx.fillText('REFUELED!', x + w + 16, y + 10);
-      ctx.restore();
-    }
-  }
-
-  // Traction beam and Flipit Reward display
-  {
-    const traction = tractionBeamRef.current;
-    const tractionAugGuard = traction as TractionAug;
-    if (traction.active || (tractionAugGuard.textHoldUntil != null && performance.now() < tractionAugGuard.textHoldUntil)) {
-      const now = performance.now();
-      // Provide current stage snapshot for render (non-behavioral)
-      const tractionAug = traction as TractionAug;
-      tractionAug.gameState = { stage: gameState.stage };
-      // Use tractor beam render helpers
-      renderTractorOverlay(ctx, traction, now);
-      renderFlipit(ctx, traction, now, CANVAS_WIDTH, CANVAS_HEIGHT);
-
-      // ---- Decode explosion trigger (one-shot) ----
-      {
-        const t = tractionBeamRef.current;
-        if (t.phase === 'displaying' && t.decodeStartTime) {
-          const combinedStart = t.decodeStartTime + beamUi.DECODE_DURATION_MS + beamUi.MULTIPLIER_DELAY_MS + 400;
-          const tAug = t as TractionAug;
-          if (!tAug.decodeExplosionsFired && now >= combinedStart) {
-            tAug.decodeExplosionsFired = true;
-
-            ctx.save();
-            ctx.font = 'bold 22px Arial';
-            const cx = CANVAS_WIDTH / 2;
-            const cy = CANVAS_HEIGHT / 2 - 40;
-
-            const pctStr = `${(t.flipitChance * 100).toFixed(1)}%`;
-            const stage = gameState.stage;
-            const multStr = `×${stage}`;
-
-            const pctW = ctx.measureText(pctStr).width;
-            const multW = ctx.measureText(multStr).width;
-
-            const pctX = cx;
-            const multX = pctX + pctW / 2 + beamUi.GAP_PCT_TO_MULT + multW / 2;
-            const y = cy;
-
-            // Small black puffs along the LEFT text (percent) from left→right
-            const leftStart = pctX - pctW / 2;
-            const samples = Math.max(3, Math.round(pctW / 40));
-            for (let i = 0; i < samples; i++) {
-              const sx = leftStart + (i / Math.max(1, samples - 1)) * pctW;
-              gameState.explosions.push(createBlackPuffExplosion({ x: sx, y }, 6 + (i % 3)));
-            }
-
-            // Multiplier burst at its center
-            const mx = multX;
-            for (let k = 0; k < 12; k++) {
-              gameState.explosions.push(createBlackPuffExplosion({ x: mx, y }, 8));
-            }
-
-            ctx.restore();
-          }
-        }
-      }
-    }
-  }
-
-  // Black frame border and off-screen indicators (framework)
-  {
-    // Draw black frame border (thin)
-    const border = 2;
-    ctx.save();
-    ctx.globalAlpha = 0.85;
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = border;
-    ctx.strokeRect(border * 0.5, border * 0.5, CANVAS_WIDTH - border, CANVAS_HEIGHT - border);
-    ctx.restore();
-
-    // Helper to draw directional indicator toward a world-tiled target
-    const drawIndicator = (
-      target: { tileX: number; tileY: number; position: { x: number; y: number } },
-      kind: 'fuel' | 'reward'
-    ) => {
-      const px = gameState.player.position.x;
-      const py = gameState.player.position.y;
-      const curTX = gameState.worldTileX ?? 0;
-      const curTY = gameState.worldTileY ?? 0;
-      const dTX = target.tileX - curTX;
-      const dTY = target.tileY - curTY;
-      // Chebyshev tile distance (1..9 clamp)
-      const tileDist = Math.max(Math.abs(dTX), Math.abs(dTY));
-      const wraps = Math.max(1, Math.min(9, tileDist));
-      // Direction angle: if target is in another tile, use tile vector; otherwise use in-tile local vector
-      const ang = (tileDist > 0)
-        ? Math.atan2(dTY, dTX)
-        : Math.atan2(target.position.y - py, target.position.x - px);
-
-      // Compute intersection with inner rect (frame minus margin)
-      const margin = border * 0.5 + 6;
-      const xMin = margin, xMax = CANVAS_WIDTH - margin;
-      const yMin = margin, yMax = CANVAS_HEIGHT - margin;
-
-      // Ray from center towards angle; find first intersection with rectangle
-      // Parametric form: p + t*v where v = (cos, sin), t > 0
-      const vx = Math.cos(ang), vy = Math.sin(ang);
-      let t = Infinity;
-      let ax = CANVAS_WIDTH / 2, ay = CANVAS_HEIGHT / 2;
-      // Intersect with vertical lines x = xMin/xMax
-      if (Math.abs(vx) > 1e-5) {
-        const t1 = (xMin - ax) / vx;
-        const y1 = ay + t1 * vy;
-        if (t1 > 0 && y1 >= yMin && y1 <= yMax && t1 < t) t = t1;
-        const t2 = (xMax - ax) / vx;
-        const y2 = ay + t2 * vy;
-        if (t2 > 0 && y2 >= yMin && y2 <= yMax && t2 < t) t = t2;
-      }
-      // Intersect with horizontal lines y = yMin/yMax
-      if (Math.abs(vy) > 1e-5) {
-        const t3 = (yMin - ay) / vy;
-        const x3 = ax + t3 * vx;
-        if (t3 > 0 && x3 >= xMin && x3 <= xMax && t3 < t) t = t3;
-        const t4 = (yMax - ay) / vy;
-        const x4 = ax + t4 * vx;
-        if (t4 > 0 && x4 >= xMin && x4 <= xMax && t4 < t) t = t4;
-      }
-      if (!isFinite(t) || t === Infinity) return;
-      ax = ax + vx * t;
-      ay = ay + vy * t;
-
-      // Draw mini icon at (ax, ay) rotated to face inward (opposite of ang)
-      // Distance digit already computed above from tiles (Chebyshev)
-      ctx.save();
-      ctx.translate(ax, ay);
-      // Small station or reward icon
-      ctx.save();
-      ctx.rotate(ang);
-      if (kind === 'fuel') {
-        // Mini station ring + pylon thumbnail
-        ctx.globalAlpha = 0.95;
-        ctx.strokeStyle = '#88ffcc';
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.stroke();
-        ctx.strokeStyle = '#66d9aa';
-        ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = '#3a6355';
-        ctx.fillRect(-1.5, -12, 3, 6);
-      } else {
-        // Reward ship mini silhouette
-        ctx.globalAlpha = 0.95;
-        ctx.strokeStyle = '#cfe3ff';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(-7, 3);
-        ctx.lineTo(0, -6);
-        ctx.lineTo(7, 3);
-        ctx.lineTo(5, 3);
-        ctx.lineTo(0, -1);
-        ctx.lineTo(-5, 3);
-        ctx.closePath();
-        ctx.stroke();
-      }
-      ctx.restore();
-
-      // Arrow triangle pointing inward
-      ctx.save();
-      ctx.rotate(ang);
-      ctx.fillStyle = '#ffffff';
-      ctx.globalAlpha = 0.95;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(-12, -7);
-      ctx.lineTo(-12, 7);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-
-      // Distance digit offset inward from border
-      ctx.save();
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 12px Arial';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      const offX = -18 * Math.cos(ang);
-      const offY = -18 * Math.sin(ang);
-      ctx.fillText(String(wraps), ax + offX, ay + offY);
-      ctx.restore();
-      ctx.restore();
-    };
-
-    // Render indicators if targets exist
-    if (gameState.refuelStation && gameState.refuelStation.position) {
-      drawIndicator(gameState.refuelStation, 'fuel');
-    }
-    if (gameState.rewardShip && gameState.rewardShip.position) {
-      drawIndicator(gameState.rewardShip, 'reward');
-    }
-
-    // Optional Debug HUD
-    if (showDebugHud) {
-      ctx.save();
-      ctx.globalAlpha = 0.9;
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(8, CANVAS_HEIGHT - 88, 260, 80);
-      ctx.fillStyle = '#88ffcc';
-      ctx.font = '12px monospace';
-      const tx = gameState.worldTileX ?? 0;
-      const ty = gameState.worldTileY ?? 0;
-      const st = gameState.refuelStation;
-      const dtx = st ? st.tileX - tx : 0;
-      const dty = st ? st.tileY - ty : 0;
-      const vel = gameState.player.velocity;
-      const keys = Object.keys(gameState.keys).filter(k => gameState.keys[k]).join('');
-      ctx.fillText(`Tile: (${tx}, ${ty})`, 14, CANVAS_HEIGHT - 68);
-      ctx.fillText(`To Station: dT=(${dtx}, ${dty})`, 14, CANVAS_HEIGHT - 52);
-      ctx.fillText(`Vel: (${vel.x.toFixed(2)}, ${vel.y.toFixed(2)})`, 14, CANVAS_HEIGHT - 36);
-      ctx.fillText(`Keys: ${keys}`, 14, CANVAS_HEIGHT - 20);
-      ctx.restore();
-    }
-}
-
-// Draw missile popups as mini missile icons flying to HUD slots
-if (gameState.missilePopups && gameState.missilePopups.length > 0) {
-  for (const p of gameState.missilePopups) {
-    const age = Date.now() - p.start;
-    const alpha = p.phase === 'hover' ? 1.0 : Math.max(0.6, 1.0 - age / 1600);
-    const sc = typeof p.scale === 'number' ? p.scale! : 1.0;
-    ctx.save();
-    ctx.translate(p.x, p.y);
-    ctx.scale(sc, sc);
-    ctx.globalAlpha = alpha;
-    // Draw white missile glyph (matching HUD glyph)
-    ctx.shadowColor = '#ffffff';
-    ctx.shadowBlur = 8;
-    ctx.lineWidth = 2;
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.moveTo(10, 0);
-    ctx.lineTo(-8, -5);
-    ctx.lineTo(-8, 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(-11, 0, 3, 0, 2 * Math.PI);
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  }
-}
-
-// Lives indicator top-right
-const livesText = `Lives: ${gameState.lives}`;
-const metrics = ctx.measureText(livesText);
-ctx.save();
-ctx.globalAlpha = (now < livesBrightUntilRef.current) ? 1.0 : baseAlpha;
-// Draw lives text (placeholder for iconography)
-ctx.fillStyle = '#ffffff';
-ctx.fillText(livesText, CANVAS_WIDTH - metrics.width - 20, 40);
-ctx.restore();
-
-// Health bar
-const healthBarWidth = 200;
-const healthBarHeight = 20;
-const healthPercentage = gameState.player.health / gameState.player.maxHealth;
-
-// Health bar (dim by default); brighten on heal; red flash on drop (stays dim)
-const healthBright = now < healthBrightUntilRef.current;
-const healthDrop = now < healthDropUntilRef.current;
-ctx.save();
-ctx.globalAlpha = healthBright ? 1.0 : baseAlpha;
-// Background bar
-ctx.fillStyle = '#333333';
-ctx.fillRect(20, 90, healthBarWidth, healthBarHeight);
-// Foreground bar
-if (healthDrop) {
-  ctx.fillStyle = '#ff3333';
-} else {
-  // Normal green-ish health color
-  const pct = Math.max(0, Math.min(1, healthPercentage));
-  ctx.fillStyle = pct > 0.5 ? '#00ff66' : '#ffcc00';
-}
-ctx.fillRect(20, 90, healthBarWidth * Math.max(0, Math.min(1, healthPercentage)), healthBarHeight);
-ctx.restore();
-
-ctx.globalAlpha = healthBright ? 1.0 : baseAlpha;
-// Background bar
-ctx.fillStyle = '#333333';
-ctx.fillRect(20, 90, healthBarWidth, healthBarHeight);
-// Foreground bar
-if (healthDrop) {
-  ctx.fillStyle = '#ff3333';
-} else {
-  // Normal green-ish health color
-  const pct = Math.max(0, Math.min(1, healthPercentage));
-  ctx.fillStyle = pct > 0.5 ? '#00ff66' : '#ffcc00';
-}
-ctx.fillRect(20, 90, healthBarWidth * Math.max(0, Math.min(1, healthPercentage)), healthBarHeight);
-ctx.restore();
-
-const isHealing = gameState.healEffect > 0;
-const healGlowIntensity = isHealing ? (gameState.healEffect / 120) : 0;
-
-// Health bar background
-ctx.fillStyle = '#333333';
-ctx.fillRect(20, 90, healthBarWidth, healthBarHeight);
-
-// Heal effect glow background
-if (isHealing) {
-  ctx.shadowColor = '#00ff00';
-  ctx.shadowBlur = 20 * healGlowIntensity;
-  ctx.fillStyle = `rgba(0, 255, 0, ${0.3 * healGlowIntensity})`;
-  ctx.fillRect(15, 85, healthBarWidth + 10, healthBarHeight + 10);
-  ctx.shadowBlur = 0;
-}
-
-// Health bar fill
-let healthColor = healthPercentage > 0.5 ? '#00ff00' : healthPercentage > 0.25 ? '#ffff00' : '#ff0000';
-if (isHealing) {
-  healthColor = `rgba(0, 255, 0, ${0.8 + 0.2 * healGlowIntensity})`;
-}
-ctx.fillStyle = healthColor;
-ctx.fillRect(20, 90, healthBarWidth * healthPercentage, healthBarHeight);
-
-// Health bar border
-ctx.strokeStyle = '#ffffff';
-// Removed duplicated UI block
-  // Missile lock reticles: seeking (during countdown) and latched (after launch)
-  const locking = gameState.alienShips.find(a => (a as AlienShip).isMissileType && (a as AlienShip).lockCountdown && (a as AlienShip).lockCountdown! > 0) as AlienShip | undefined;
-  const latched = gameState.alienShips.find(a => (a as AlienShip).isMissileType && (a as AlienShip).lockLatched) as AlienShip | undefined;
-  if (locking) {
-    // Seeking circle: large ring that orbits around player and converges as lockCountdown approaches zero
-    const now = performance.now();
-    const lc = Math.max(0, Math.min(90, locking.lockCountdown || 0));
-    const tNorm = lc / 90; // 1 -> 0 as it approaches lock
-    const orbitR = 30 * tNorm; // wander radius around player
-    const ringR = 80 * tNorm + 28; // ring radius shrinks toward ~28px
-    const ang = now * 0.006; // slow orbit
-    const jitter = Math.sin(now * 0.013) * 0.6;
-    const cx = gameState.player.position.x + Math.cos(ang + jitter) * orbitR;
-    const cy = gameState.player.position.y + Math.sin(ang - jitter) * orbitR;
-    ctx.save();
-    ctx.shadowColor = '#ffa43a';
-    ctx.shadowBlur = 16;
-    ctx.strokeStyle = '#ff9c2e';
-    ctx.lineWidth = 3;
-    // Single converging ring
-    ctx.beginPath();
-    ctx.arc(cx, cy, ringR, 0, 2 * Math.PI);
-    ctx.stroke();
-    // Small animated gaps to suggest targeting
-    ctx.lineWidth = 4;
-    const segs = 4;
-    for (let i = 0; i < segs; i++) {
-      const a0 = (i / segs) * Math.PI * 2 + (now * 0.002);
-      ctx.beginPath();
-      ctx.arc(cx, cy, ringR, a0, a0 + 0.25);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-  if (latched) {
-    // Latched target: crosshair stuck on the player's position until missile resolves
-    const cx = gameState.player.position.x;
-    const cy = gameState.player.position.y;
-    const base = 24;
-    const glow = 18;
-    ctx.save();
-    ctx.shadowColor = '#ff5a2e';
-    ctx.shadowBlur = glow;
-    ctx.strokeStyle = '#ff713a';
-    ctx.lineWidth = 3;
-    // Small inner circle
-    ctx.beginPath();
-    ctx.arc(cx, cy, 14, 0, 2 * Math.PI);
-    ctx.stroke();
-    // Crosshair ticks
-    ctx.beginPath();
-    ctx.moveTo(cx - base, cy); ctx.lineTo(cx - base + 10, cy);
-    ctx.moveTo(cx + base, cy); ctx.lineTo(cx + base - 10, cy);
-    ctx.moveTo(cx, cy - base); ctx.lineTo(cx, cy - base + 10);
-    ctx.moveTo(cx, cy + base); ctx.lineTo(cx, cy + base - 10);
-    ctx.stroke();
-    ctx.restore();
-  }
-  // Top-center quip overlays (skip song titles - they're handled in bottom area)
-  if (titleOverlaysRef.current && titleOverlaysRef.current.length > 0) {
-    // Find the first non-song overlay to render at the top; do not remove song titles here
-    const idx = titleOverlaysRef.current.findIndex(o => !o.text.startsWith('♪'));
-    if (idx >= 0) {
-      const overlay = titleOverlaysRef.current[idx];
-      const elapsed = performance.now() - overlay.start;
-      const hold = 2500; // 2.5s hold
-      const fade = 1200; // 1.2s fade
-      const total = hold + fade;
-      let alpha = 1;
-      if (elapsed > hold) {
-        const t = Math.min(1, (elapsed - hold) / fade);
-        alpha = 1 - t;
-      }
-      if (elapsed > total) {
-        // Remove only the quip we rendered
-        titleOverlaysRef.current.splice(idx, 1);
-      } else {
-        ctx.save();
-        ctx.globalAlpha = alpha;
-        ctx.textAlign = 'center';
-        ctx.shadowColor = '#66ccff';
-        ctx.shadowBlur = 12;
-        ctx.fillStyle = '#cfeeff';
-        ctx.font = '20px Arial';
-        ctx.fillText(overlay.text, CANVAS_WIDTH / 2, 64);
-        ctx.restore();
-      }
-    }
-  }
-  };
+  
+  
+  
+  /* UI drawing previously done locally has been refactored to modular drawHUD/drawMiniMap/drawObjectives.
+   * Any remaining deltas should be extracted in future work. */
 
   // Game loop
   const gameLoop = useCallback(() => {
@@ -2882,94 +1215,82 @@ ctx.strokeStyle = '#ffffff';
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Optional soft FPS cap: skip this tick if within min frame interval
+    const cfgCap = getFxConfig({ refs: { fxConfig: devFxRefs.current.fxConfig } }).capFps;
+    if (Number.isFinite(cfgCap as number) && (cfgCap as number) > 0) {
+      const now = performance.now();
+      const minDelta = 1000 / (cfgCap as number);
+      if (now - lastProcessedRef.current < minDelta) {
+        animationFrameRef.current = requestAnimationFrame(gameLoop);
+        return; // skip frame; order of update/draw remains unchanged for processed frames
+      }
+      lastProcessedRef.current = now;
+    }
+
     const gameState = gameStateRef.current;
 
-    // Dev: log every ~30 frames (guarded, no-op in production)
-    if (__DEV_MODE__ && (++__frameCounter % 30 === 0)) {
+    // Dev: throttle summary instead of per-30-frame spam
+    if (__DEV_MODE__) {
       const gs = gameStateRef.current as any;
-      const tractorPhase = gs?.tractorBeam?.phase ?? 'idle';
-
-      console.log({
-        frame: __frameCounter,
+      const f = ++__frameCounter;
+      logThrottle('summary', 2000, () => ({
+        frame: f,
         asteroidCount: gs?.asteroids?.length ?? 0,
         bulletCount: gs?.bullets?.length ?? 0,
         debrisCount: gs?.visualDebris?.length ?? 0,
         explosionsCount: gs?.explosions?.length ?? 0,
-        tractorPhase,
+        tractorPhase: gs?.tractorBeam?.phase ?? 'idle',
         bgBrightness: gs?.bgBrightness ?? DEFAULT_BG_BRIGHTNESS,
-      });
+      }));
     }
 
-    // Skip gameplay updates if UI is paused (InfoPopup open), but continue rendering
-    if (uiPausedRef.current) {
-      // Still render the current frame but skip all game state updates
-      drawUI(ctx, gameState);
-      // Dev: add a lightweight summary roughly every 30 seconds (60fps * 30s = 1800 frames)
-    if (__DEV_MODE__) {
-      __frameCounter++;
-      if (__frameCounter % 1800 === 0) {
-        const gs = gameStateRef.current;
-        const tractorPhase = gs?.tractorBeam?.phase ?? 'idle';
-        const summary = `f=${__frameCounter} ast=${gs?.asteroids?.length ?? 0} bul=${gs?.bullets?.length ?? 0} deb=${gs?.visualDebris?.length ?? 0} exp=${gs?.explosions?.length ?? 0} phase=${tractorPhase} bg=${(gs as any)?.bgBrightness ?? 0.4}`;
-        // Mirror to console for parity with existing logs
-        // eslint-disable-next-line no-console
-        console.log('[summary]', summary);
-        // Push to in-app panel buffer (cap 200)
-        const arr = debugLinesRef.current;
-        arr.push(summary);
-        if (arr.length > 200) arr.splice(0, arr.length - 200);
-      }
-    }
-
-    animationFrameRef.current = requestAnimationFrame(gameLoop);
-      return;
-    }
+    // When paused, we still render the frame (updates are skipped below via isPausedRef guards).
 
     // Auto-open popup 2 seconds after game starts (only once per game session)
-    if (!autoPopupShownRef.current && gameStartTimeRef.current > 0 && gameState.gameRunning) {
-      const elapsed = performance.now() - gameStartTimeRef.current;
-      if (elapsed >= 2000) { // 2 seconds
-        autoPopupShownRef.current = true;
-        setInfoOpen(true);
+    // Don't show if scoreboard/completion screens are active
+  if (!autoPopupShownRef.current && gameStartTimeRef.current > 0 && gameState.gameRunning && !gameOverStartRef.current && !anyModalOpenRef.current) {
+    const elapsed = lastFrameNowRef.current - gameStartTimeRef.current;
+    if (elapsed >= 2000) { // 2 seconds
+      autoPopupShownRef.current = true;
+      setInfoOpen(true);
       }
     }
 
     // Draw a tiny floating control for Distortion toggle (top-left under score)
     // Note: kept lightweight; UI paint happens later in drawUI via React
 
-    // Emit scheduled player-death explosions (10 over 2s)
-    if (deathBurstsRef.current.remaining > 0 && deathBurstsRef.current.pos) {
-      const total = 120; // 2 seconds at 60fps
-      const elapsed = total - deathBurstsRef.current.remaining;
-      const targetCount = Math.min(10, Math.floor((elapsed / total) * 10));
-      while (deathBurstsRef.current.spawned < targetCount) {
-        const ang = Math.random() * Math.PI * 2;
-        const r = 10 + Math.random() * 50;
-        const px = deathBurstsRef.current.pos.x + Math.cos(ang) * r;
-        const py = deathBurstsRef.current.pos.y + Math.sin(ang) * r;
-        const boom = createExplosion({ x: px, y: py });
-        gameState.explosions.push(boom);
-        deathBurstsRef.current.spawned++;
-      }
-      deathBurstsRef.current.remaining--;
-      if (deathBurstsRef.current.remaining <= 0) {
-        deathBurstsRef.current.pos = null;
-      }
-    }
+    // Death bursts: moved to after env construction to honor runtime FX presets.
 
     // Apply slow motion during traction beam
     const traction = tractionBeamRef.current;
     const slowMotionFactor = traction.slowMotionActive ? 0.5 : 1.0;
     const deltaTime = 16 * slowMotionFactor;
 
+    // Check if any modal/popup is open (use ref to avoid stale closure)
+    const anyModalOpen = anyModalOpenRef.current;
+
     // Define the per-frame body wrapper used below
     const __runFrameBody = () => {
       // Pass A: compute now/dt once and thread to stubbed update/draw
       const frameNow = performance.now();
+      // Expose per-frame now to render/UI so no resampling occurs
+      lastFrameNowRef.current = frameNow;
       const dt = deltaTime;
+      const bootMs = frameNow - bootStartRef.current;
+      const isBootSettled = (
+        bootMs >= 1000 &&
+        Number.isFinite((gameState as any).worldTileX) &&
+        Number.isFinite((gameState as any).worldTileY) &&
+        Number.isFinite(gameState.player?.position?.x as number) &&
+        Number.isFinite(gameState.player?.position?.y as number)
+      );
+      // Freeze render time while paused so animated UI layers become static
+      const renderNow = isPausedRef.current ? (pauseFreezeNowRef.current ?? frameNow) : frameNow;
       const env = {
         VITE_ENV: import.meta.env?.VITE_ENV,
         DEFAULT_BG_BRIGHTNESS,
+        frameNow: renderNow,
+        isBootSettled,
         refs: {
           bgImageRef,
           bgImageDataRef,
@@ -2986,6 +1307,8 @@ ctx.strokeStyle = '#ffffff';
           bgContrastRef,
           bgBrightnessRef,
           effectsApplyRef,
+          // Traction beam state for overlays and asteroid scan grid
+          tractionBeamRef,
           // Stars and warp particles
           starsRef,
           initialAreaRef,
@@ -3000,24 +1323,109 @@ ctx.strokeStyle = '#ffffff';
           DUCK_HOLD_MS,
           backdrops,
           introZoomStartRef,
+          // Boot clock reference for early-frame guards in draw module
+          bootStartRef,
+          // Dev perf config overrides (optional)
+          fxConfig: devFxRefs.current.fxConfig,
+          // Provide soundSystem for factories needing one-off SFX scheduling
+          soundSystem,
         },
       } as const;
+      // Capture previous position to detect wraps performed inside update()
+      const prevX = gameState.player.position.x;
+      const prevY = gameState.player.position.y;
+      
+      // Set reversed controls flag for player update
+      (gameState as any).reversedControls = Date.now() < reversedControlsUntilRef.current;
+      (gameState as any).bubbleEffect = Date.now() < bubbleEffectUntilRef.current;
+      
       // Forward call sites only; no logic moved yet
-      updateFrame(gameState, frameNow, dt, env, soundSystem);
+      // Pause updates when paused OR when any modal/popup is showing
+      if (!isPausedRef.current && !anyModalOpen) {
+        updateFrame(gameState, frameNow, dt, env, soundSystem);
+      }
+
+      // World tiling: detect screen wrap by comparing previous vs current positions
+      {
+        const W = (typeof CANVAS_WIDTH !== 'undefined' ? CANVAS_WIDTH : ctx.canvas.width);
+        const H = (typeof CANVAS_HEIGHT !== 'undefined' ? CANVAS_HEIGHT : ctx.canvas.height);
+        const curX = gameState.player.position.x;
+        const curY = gameState.player.position.y;
+        let tileX = (gameState.worldTileX ?? 1);
+        let tileY = (gameState.worldTileY ?? 1);
+        let crossed = false;
+        const M = 12; // edge margin in pixels
+        // Horizontal wrap detection
+        if (prevX > W - M && curX < M) { tileX += 1; crossed = true; }
+        else if (prevX < M && curX > W - M) { tileX -= 1; crossed = true; }
+        // Vertical wrap detection
+        if (prevY > H - M && curY < M) { tileY += 1; crossed = true; }
+        else if (prevY < M && curY > H - M) { tileY -= 1; crossed = true; }
+        if (crossed) {
+          const clamp = (v: number) => Math.max(WORLD_MIN_TILE, Math.min(WORLD_MAX_TILE, v));
+          const nx = clamp(tileX);
+          const ny = clamp(tileY);
+          if (nx !== gameState.worldTileX || ny !== gameState.worldTileY) {
+            gameState.worldTileX = nx;
+            gameState.worldTileY = ny;
+            if (__DEV_MODE__) {
+              logThrottle('tile-cross', 1500, () => ({ tileX: nx, tileY: ny, prevX, prevY, curX, curY, W, H }));
+              try {
+                const arr = debugLinesRef?.current as string[] | undefined;
+                if (Array.isArray(arr)) arr.push(`[tile-cross] nx=${nx} ny=${ny} W=${W} H=${H}`);
+              } catch {}
+            }
+          }
+        }
+        
+      }
 
     // (Spawn handled inside gameRunning block; timing unchanged)
 
-      if (gameState.gameRunning && !isPausedRef.current) {
+      if (gameState.gameRunning && !isPausedRef.current && !anyModalOpen) {
         // Spawn asteroids after 1 second (original gate)
         {
           const timeSinceStageStart = Date.now() - gameState.stageStartTime;
           if (timeSinceStageStart >= 1000 && !gameState.asteroidsSpawned) {
-            const newAsteroids = createStageAsteroids(gameState.stage);
+            const newAsteroids = createStageAsteroids(gameState.stage, difficultyRef.current);
             gameState.asteroids = newAsteroids;
             gameState.asteroidsSpawned = true;
+            
+            // Initialize science vessel spawning for this stage
+            if (gameState.stage === 1) {
+              scienceVesselsToSpawnRef.current = 1;
+            } else if (gameState.stage === 2) {
+              scienceVesselsToSpawnRef.current = 2;
+            } else {
+              scienceVesselsToSpawnRef.current = 3;
+            }
+            scienceVesselsSpawnedRef.current = 0;
+            // Random spawn time within first 10 seconds
+            firstScienceVesselTimeRef.current = gameState.stageStartTime + 1000 + Math.random() * 10000;
+            scienceVesselAlertShownRef.current = false;
+            
             if (__DEV_MODE__) {
               // eslint-disable-next-line no-console
               console.log('[spawn-fired]', { stage: gameState.stage, count: gameState.asteroids?.length });
+            }
+          }
+          
+          // Spawn first science vessel randomly within first 10 seconds
+          if (scienceVesselsSpawnedRef.current === 0 && 
+              scienceVesselsToSpawnRef.current > 0 && 
+              timeSinceStageStart >= 1000 &&
+              Date.now() >= firstScienceVesselTimeRef.current) {
+            const specialAsteroid = gameState.asteroids.find(a => a.special === true);
+            if (specialAsteroid) {
+              const scienceVessel = createScienceVessel(specialAsteroid, 'primary', gameState.stage);
+              gameState.alienShips.push(scienceVessel);
+              scienceVesselsSpawnedRef.current++;
+              
+              // Show alert
+              if (!scienceVesselAlertShownRef.current) {
+                setActionNotes(prev => [...prev, '⚠️ SCIENCE VESSEL APPROACHING!']);
+                scienceVesselAlertShownRef.current = true;
+              }
             }
           }
         }
@@ -3078,174 +1486,133 @@ ctx.strokeStyle = '#ffffff';
 
       // Check for tractor-beam gravity well and encounter
       const traction = tractionBeamRef.current;
-      const now = performance.now();
+      const now = lastFrameNowRef.current;
       
-      // On-top entry progression (replaces behind-entry)
-      if (traction.onTopEntry?.inProgress && traction.targetAsteroid) {
-        const t = Math.min(1, (now - traction.onTopEntry.startTime) / Math.max(1, traction.onTopEntry.durationMs));
-        const ease = t * t * (3 - 2 * t);
-        const a = traction.targetAsteroid;
-        const ax = a.position.x, ay = a.position.y;
-        const dx = ax - gameState.player.position.x;
-        const dy = ay - gameState.player.position.y;
-        const d = Math.hypot(dx, dy) || 1;
-        const ux = dx / d, uy = dy / d;
-        const surfaceR = (a.radius || 28) + gameState.player.radius + 4;
-        const tx = ax - ux * surfaceR;
-        const ty = ay - uy * surfaceR;
-        gameState.player.position.x = gameState.player.position.x + (tx - gameState.player.position.x) * ease;
-        gameState.player.position.y = gameState.player.position.y + (ty - gameState.player.position.y) * ease;
-        if (Math.random() < 0.4) {
-          if (!gameState.visualDebris) gameState.visualDebris = [];
-          const dust = {
-            position: { x: tx, y: ty },
-            velocity: { x: (Math.random() - 0.5) * 0.15, y: (Math.random() - 0.5) * 0.15 },
-            life: 0,
-            maxLife: 180,
-            size: 1 + Math.random() * 1.5,
-            color: '#6cff9a',
-            kind: 'dust' as const,
-          } satisfies VisualDebris;
-          gameState.visualDebris.push(dust);
-        }
-        if (t >= 1) {
-          traction.onTopEntry.inProgress = false;
-          // Begin orbit and start grid scan
-          traction.active = true;
-          traction.phase = 'attached';
-          traction.attachStartTime = now;
-          (traction as TractionAug).gameState = { stage: gameState.stage };
-          traction._orbitExtendMs = (traction._orbitExtendMs ?? 0) + 800;
-          startGridScan(traction, now);
-          try { soundSystem.playScanTick?.(); } catch { /* ignore */ }
-          (traction as TractionAug)._scanTicking = true;
-          (traction as TractionAug)._lastScanTick = now;
-        }
-      } else if (!traction.active) {
-        // Gravity well detection and capture
+      // Simple overlap capture for special asteroids (but not during LOST sequence)
+      const lostSeqActive = (traction as any).lostSequence?.active;
+      if (!traction.active && !lostSeqActive) {
+        // Simple overlap detection for special asteroids
         const specials = gameState.asteroids.filter(a => a.special === true);
         for (const a of specials) {
           const dx = a.position.x - gameState.player.position.x;
           const dy = a.position.y - gameState.player.position.y;
           const dist = Math.hypot(dx, dy);
-          const speed = Math.hypot(gameState.player.velocity.x, gameState.player.velocity.y);
-          const captureR = GRAV_WELL_RADIUS_BASE + a.radius;
-          // Side/front capture conditions for reliable pulls without bouncing
-          {
-            const shipV = gameState.player.velocity;
-            const astV  = a.velocity;
-            const shipSpeed = Math.hypot(shipV.x, shipV.y);
-            const astSpeed  = Math.hypot(astV.x, astV.y);
-            const captureR2 = a.radius + CAPTURE_RADIUS_EXTRA;
-            if (shipSpeed < FAST_FLYBY_SPEED && dist < captureR2) {
-              const sameDirection = (shipV.x * astV.x + shipV.y * astV.y) > 0;
-              const speedSimilar = shipSpeed >= NEAR_SPEED_MIN && shipSpeed <= NEAR_SPEED_MAX;
-              const astDirX = astSpeed ? astV.x / astSpeed : 0;
-              const astDirY = astSpeed ? astV.y / astSpeed : 0;
-              const ahead = ((gameState.player.position.x - a.position.x) * astDirX + (gameState.player.position.y - a.position.y) * astDirY) > 0;
-              const catchingUp = (astSpeed - shipSpeed) > 0.08;
-              const angShip = Math.atan2(shipV.y, shipV.x);
-              const angAst  = Math.atan2(astV.y, astV.x);
-              let angleDeg = Math.abs((angShip - angAst) * 180 / Math.PI);
-              if (angleDeg > 180) angleDeg = 360 - angleDeg;
-              const withinFrontCone = angleDeg <= FRONT_CONE_DEG;
-              const sideCapture  = sameDirection && speedSimilar;
-              const frontCapture = ahead && catchingUp && withinFrontCone;
-              if (sideCapture || frontCapture) {
-                // Gravity pull
-                const inv = Math.max(dist, a.radius + 20);
-                let accel = GRAV_ACCEL_BASE * (captureR2 / inv) * (captureR2 / inv);
-                accel = Math.min(accel, GRAV_ACCEL_MAX);
-                const ux = dx / (dist || 1), uy = dy / (dist || 1);
-                gameState.player.velocity.x += ux * accel * deltaTime;
-                gameState.player.velocity.y += uy * accel * deltaTime;
-                // Commit to capture when close enough
-                if (dist < a.radius + gameState.player.radius + 6) {
-                  traction.active = true;
-                  traction.targetAsteroid = a;
-                  (traction as TractionAug).targetAsteroidIndex = gameState.asteroids.indexOf(a);
-                  traction.phase = 'approaching';
-                  traction.startTime = now;
-                  traction.slowMotionActive = true;
-                  traction.originalAsteroidVelocity = { x: a.velocity.x, y: a.velocity.y };
-                  // start on-top entry
-                  traction.onTopEntry = { startTime: now, durationMs: 500, inProgress: true };
-                  traction.forceFieldUntil = Math.max(traction.forceFieldUntil ?? 0, now + 3000);
-                  soundSystem.setMusicVolume(0.5);
-                  setActionNotes(prev => [...prev, sideCapture ? 'Capture: side' : 'Capture: front']);
-                }
-              }
-            }
+          const captureDistance = a.radius + gameState.player.radius + 10;
+          
+          // Check if science vessel is already docked on this asteroid
+          const scienceVesselDocked = gameState.alienShips.some((ship: any) => 
+            ship.isScienceVessel && 
+            ship.scienceState === 'docking' && 
+            ship.scienceTargetAsteroid === a
+          );
+          
+          if (scienceVesselDocked) {
+            // Can't dock - science vessel is stealing it!
+            setActionNotes(prev => [...prev, '⚠️ Science vessel is docking! Destroy it first!']);
+            continue; // Skip to next asteroid
           }
-          if (dist < captureR && speed < ESCAPE_SPEED_THRESH) {
-            // Start gravity capture window
-            if (!traction.gravityCapture) {
-              traction.gravityCapture = true;
-              traction.fightAllowed = Math.random() < FIGHT_ESCAPE_PROB;
-              traction.fightWindowUntil = now + FIGHT_WINDOW_MS;
-              traction.targetAsteroid = a;
-              (traction as any).targetAsteroidIndex = gameState.asteroids.indexOf(a);
-              traction.originalAsteroidVelocity = { x: a.velocity.x, y: a.velocity.y };
-              traction.forceFieldUntil = Math.max(traction.forceFieldUntil ?? 0, now + 3000);
-              try { soundSystem.playTractorWhoosh?.(); } catch {}
-              soundSystem.setMusicVolume(0.5);
-              setActionNotes(prev => [...prev, 'Gravity capture start']);
-            }
-            // Apply gravity pull
-            const inv = Math.max(dist, a.radius + 20);
-            let accel = GRAV_WELL_STRENGTH * (captureR / inv) * (captureR / inv);
-            accel = Math.min(accel, GRAV_WELL_MAX_ACCEL);
-            const ux = dx / (dist || 1), uy = dy / (dist || 1);
-            const canFight = !!traction.fightAllowed && now < (traction.fightWindowUntil ?? 0);
-            const thrustingAway = (gameState.player.velocity.x * ux + gameState.player.velocity.y * uy) < 0;
-            const fightFactor = canFight && thrustingAway ? 0.45 : 1.0;
-            gameState.player.velocity.x += ux * accel * fightFactor * deltaTime;
-            gameState.player.velocity.y += uy * accel * fightFactor * deltaTime;
-            // Escape condition
-            if (canFight && (speed > ESCAPE_SPEED_THRESH || dist > captureR * 1.15)) {
-              traction.gravityCapture = false;
-              traction.fightWindowUntil = undefined;
-              traction.fightAllowed = undefined;
-              traction.targetAsteroid = null;
-              setActionNotes(prev => [...prev, 'Fight escape success']);
-              break;
-            }
-            // Capture completion -> on-top entry
-            const edge = a.radius + gameState.player.radius + 2;
-            if (dist < edge) {
-              traction.onTopEntry = { startTime: now, durationMs: 500, inProgress: true };
-              traction.gravityCapture = false;
-              traction.fightWindowUntil = undefined;
-              traction.fightAllowed = undefined;
-              setActionNotes(prev => [...prev, 'On-top entry']);
-            }
+          
+          // Simple rule: player overlaps special asteroid → instant capture
+          if (dist < captureDistance) {
+            traction.active = true;
+            traction.targetAsteroid = a;
+            (traction as any).targetAsteroidIndex = gameState.asteroids.indexOf(a);
+            traction.phase = 'attached'; // Skip to attached immediately
+            traction.attachStartTime = now;
+            traction.slowMotionActive = true;
+            traction.originalAsteroidVelocity = { x: a.velocity.x, y: a.velocity.y };
+            
+            // Initialize orbit
+            traction.orbitAngle = Math.atan2(
+              gameState.player.position.y - a.position.y,
+              gameState.player.position.x - a.position.x
+            );
+            traction.orbitRadius = a.radius + gameState.player.radius + 8;
+            
+            // Slow down asteroid
+            a.velocity.x *= 0.25;
+            a.velocity.y *= 0.25;
+            
+            // Start grid scan
+            (traction as TractionAug).gameState = { stage: gameState.stage };
+            startGridScan(traction, now);
+            
+            // Audio/visual feedback
+            try { soundSystem.playTractorWhoosh?.(); } catch {}
+            try { soundSystem.playScanTick?.(); } catch {}
+            soundSystem.setMusicVolume(0.5);
+            (traction as any)._scanTicking = true;
+            (traction as any)._lastScanTick = now;
+            
+            setActionNotes(prev => [...prev, 'Captured special asteroid - scan started']);
             break;
           }
         }
       }
 
       // Update asteroids BEFORE traction beam physics to ensure correct positioning
-      gameState.asteroids = gameState.asteroids.map(updateAsteroid);
+      // Only update if game is running or auto-destruction is active
+      if (gameState.gameRunning || autoDestructionActiveRef.current) {
+        gameState.asteroids = gameState.asteroids.map(updateAsteroid);
+      }
 
       // IMPORTANT: Rebind traction target to the freshly updated asteroid object
       if (traction.active) {
-        const idx = (traction as TractionAug).targetAsteroidIndex;
+        const idx = (traction as any).targetAsteroidIndex;
+        const oldTarget = traction.targetAsteroid;
+        
+        // Verify the asteroid at this index is actually the same one (has special flag)
         if (typeof idx === 'number' && idx >= 0 && idx < gameState.asteroids.length) {
-          traction.targetAsteroid = gameState.asteroids[idx];
-        } else if (traction.targetAsteroid) {
-          // Fallback: find the nearest special asteroid to previous target position
-          const prev = traction.targetAsteroid.position;
-          let best: Asteroid | null = null;
-          let bestD = Infinity;
-          for (const a of gameState.asteroids) {
-            if (!a.special) continue;
-            const dx = a.position.x - prev.x, dy = a.position.y - prev.y; const d = Math.hypot(dx, dy);
-            if (d < bestD) { bestD = d; best = a; }
+          const asteroidAtIndex = gameState.asteroids[idx];
+          // Check if this is the same asteroid (must be special)
+          if (asteroidAtIndex && asteroidAtIndex.special === true) {
+            traction.targetAsteroid = asteroidAtIndex;
+          } else {
+            // Asteroid at this index is no longer special - target was destroyed
+            traction.targetAsteroid = null;
           }
-          if (best) {
-            traction.targetAsteroid = best;
-            (traction as TractionAug).targetAsteroidIndex = gameState.asteroids.indexOf(best);
+        } else {
+          // Index out of range - asteroid was removed
+          traction.targetAsteroid = null;
+        }
+        
+        // If we lost the target, trigger LOST sequence
+        if (oldTarget && !traction.targetAsteroid) {
+          // Target lost - trigger "LOST" sequence instead of jumping to another asteroid
+          // Use the FINAL chance (with stage multiplier) to match what's shown in HUD
+          const baseChance = traction.flipitChance || 0.05;
+          const finalChance = baseChance * 100 * gameState.stage;
+          const lostPercent = finalChance.toFixed(1);
+          
+          // Trigger loss animation and sound (use performance.now for consistency)
+          (traction as any).lostSequence = {
+            startTime: performance.now(),
+            initialPercent: parseFloat(lostPercent),
+            active: true
+          };
+          
+          // Bounce player away from last known position
+          const dx = gameState.player.position.x - oldTarget.position.x;
+          const dy = gameState.player.position.y - oldTarget.position.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          const bounceSpeed = 3;
+          gameState.player.velocity.x += (dx / dist) * bounceSpeed;
+          gameState.player.velocity.y += (dy / dist) * bounceSpeed;
+          
+          // Play "bad" sound - method removed
+          
+          // Update artifact status to LOST
+          if (gameState.currentArtifact) {
+            gameState.currentArtifact.type = 'unknown' as any; // Mark as lost
+            (gameState.currentArtifact as any).status = 'LOST';
           }
+          
+          // DON'T end traction yet - keep it active during LOST countdown to prevent re-capture
+          // traction.active will be set to false after countdown finishes
+          traction.targetAsteroid = null;
+          traction.slowMotionActive = false;
+          soundSystem.setMusicVolume(1.0);
+          setActionNotes(prev => [...prev, 'Artifact LOST - target destroyed']);
         }
       }
 
@@ -3262,87 +1629,8 @@ ctx.strokeStyle = '#ffffff';
           const dy = asteroid.position.y - gameState.player.position.y;
           const distance = Math.hypot(dx, dy);
           
-          if (traction.phase === 'approaching') {
-            // Smooth pull toward asteroid for 3 seconds
-            const elapsed = now - traction.startTime;
-            if (elapsed < 3000) {
-              // Rendezvous plan: both slow and come to rest near each other
-              const targetDistance = asteroid.radius + 40;
-              const dirX = distance > 0 ? dx / distance : 0;
-              const dirY = distance > 0 ? dy / distance : 0;
-              // Meeting point where the ship should stop (at desired offset from asteroid)
-              const meetX = asteroid.position.x - dirX * targetDistance;
-              const meetY = asteroid.position.y - dirY * targetDistance;
-
-              // Pull ship toward meeting point (ease-in)
-              const pullStrength = 0.12; // stronger so we settle quickly
-              gameState.player.position.x += (meetX - gameState.player.position.x) * pullStrength;
-              gameState.player.position.y += (meetY - gameState.player.position.y) * pullStrength;
-
-              // Exponential damping to slow both objects
-              gameState.player.velocity.x *= 0.80;
-              gameState.player.velocity.y *= 0.80;
-              asteroid.velocity.x *= 0.92;
-              asteroid.velocity.y *= 0.92;
-              
-              // Check if user accelerates (breaks traction)
-              if (gameState.keys.up || gameState.keys.down) {
-                traction.active = false;
-                traction.slowMotionActive = false;
-                // Clear key states to prevent stuck inputs
-                gameState.keys = {};
-                // Restore asteroid velocity
-                if (traction.originalAsteroidVelocity && traction.targetAsteroid) {
-                  traction.targetAsteroid.velocity.x = traction.originalAsteroidVelocity.x;
-                  traction.targetAsteroid.velocity.y = traction.originalAsteroidVelocity.y;
-                }
-                // Restore music volume
-                soundSystem.setMusicVolume(1.0);
-                setActionNotes(prev => [...prev, "Traction beam broken - player accelerated"]);
-              }
-            } else {
-              // Immediately enter attached rotation (skip hard lock hold) and enable brief force field
-              traction.orbitRadius = asteroid.radius + 40;
-              traction.orbitAngle = Math.atan2(dy, dx);
-              // Stop both so there's no follow jitter
-              asteroid.velocity.x = 0;
-              asteroid.velocity.y = 0;
-              gameState.player.velocity.x = 0;
-              gameState.player.velocity.y = 0;
-              // Force field window ~4s across early orbit
-              traction.forceFieldUntil = now + 4000;
-              // Compute skipped lock ms (was ~200ms visual hold)
-              traction.skippedLockMs = 200;
-              // Start a short glide into the orbit ring
-              traction.lockLerpStartTime = now;
-              traction.lockLerpDurationMs = 250;
-              // Enter attached immediately
-              traction.phase = 'attached';
-              traction.attachStartTime = now;
-              (traction as TractionAug).gameState = { stage: gameState.stage };
-              try { soundSystem.playTractorWhoosh(); } catch {}
-              setActionNotes(prev => [...prev, "Traction beam locked - ship attached, asteroid slowed"]);
-            }
-          } else if (traction.phase === 'locking') {
-            // Smooth lock-in: glide from current ship position into orbit ring
-            if (traction.lockLerpStartTime === 0) {
-              traction.lockLerpStartTime = now;
-              traction.lockLerpDurationMs = 250;
-            }
-            const lerpT = Math.max(0, Math.min(1, (now - traction.lockLerpStartTime) / Math.max(1, traction.lockLerpDurationMs)));
-            const ease = lerpT * lerpT * (3 - 2 * lerpT); // smoothstep
-            const orbitX = asteroid.position.x + Math.cos(traction.orbitAngle) * traction.orbitRadius;
-            const orbitY = asteroid.position.y + Math.sin(traction.orbitAngle) * traction.orbitRadius;
-            gameState.player.position.x = gameState.player.position.x + (orbitX - gameState.player.position.x) * ease;
-            gameState.player.position.y = gameState.player.position.y + (orbitY - gameState.player.position.y) * ease;
-            gameState.player.velocity.x = asteroid.velocity.x;
-            gameState.player.velocity.y = asteroid.velocity.y;
-            if (lerpT >= 1) {
-              traction.phase = 'attached';
-              traction.attachStartTime = now;
-              (traction as TractionAug).gameState = { stage: gameState.stage ?? (gameState as unknown as { level?: number }).level ?? 1 };
-            }
-          } else if (traction.phase === 'attached') {
+          // Only handle attached, displaying, and pushing phases (capture goes directly to attached)
+          if (traction.phase === 'attached') {
             // Smooth orbital motion around asteroid
             const orbitSpeed = 0.02; // Slow, stable orbit
             traction.orbitAngle += orbitSpeed;
@@ -3398,6 +1686,9 @@ ctx.strokeStyle = '#ffffff';
               const elapsed = now - traction.attachStartTime;
               const minAttachMs = 1200;
               if (elapsed > minAttachMs && isGridComplete(traction)) {
+                // Mark asteroid as scanned by player (for visual state)
+                (asteroid as any).specialState = 'scanned';
+                
                 // Start displaying Flipit chance
                 traction.phase = 'displaying';
                 traction.displayStartTime = now;
@@ -3408,6 +1699,15 @@ ctx.strokeStyle = '#ffffff';
                 (traction as TractionAug)._scanTicking = false;
                 // Use the locked Flipit chance from the asteroid instead of generating new random number
                 traction.flipitChance = asteroid.flipitChance ?? 0.05; // fallback to 5% if not set
+                
+                // Update persistent artifact info in gameState
+                gameState.currentArtifact = {
+                  type: 'Flipit',
+                  baseChance: traction.flipitChance * 100,
+                  finalChance: traction.flipitChance * 100 * gameState.stage,
+                  scannedAt: now
+                };
+                
                 try { soundSystem.playRefuelEnergy?.(); } catch { /* ignore */ }
                 setActionNotes(prev => [...prev, `Flipit Reward Chance: ${(traction.flipitChance * 100).toFixed(1)}%`]);
               }
@@ -3444,31 +1744,37 @@ ctx.strokeStyle = '#ffffff';
               // Start brief post-push spin
               traction.postPushSpinVel = 0.08;
               traction.postPushSpinUntil = now + 900;
-              // Prepare dropped Flipit text: anchor at current ship position with slight drift
-              const shipX = gameState.player.position.x;
-              const shipY = gameState.player.position.y;
-              (traction as any).textAnchorX = shipX;
-              (traction as any).textAnchorY = shipY - 30; // center of percentage line
-              // Seed with a bit of the player's current velocity plus gentle downward drift
-              (traction as any).textVelX = (gameState.player.velocity.x || 0) * 0.08;
-              (traction as any).textVelY = (gameState.player.velocity.y || 0) * 0.08 + 0.20;
-              (traction as any).textDropStart = now;
-              // Hold for 3s, then allow an extra 1s fade window
-              (traction as any).textHoldUntil = now + 3000;
-              (traction as any).textFadeUntil = now + 4000;
               setActionNotes(prev => [...prev, "Pushed away from special asteroid"]);
             }
           } else if (traction.phase === 'pushing') {
             // Smooth push away from asteroid
             const elapsed = now - traction.pushStartTime;
             const pushDurationMs = 800;
+            
+            // Check if this is a science vessel interruption with postPushVelocity
+            if (traction.postPushVelocity && elapsed === 0) {
+              // Initial kick from science vessel interruption - apply the velocity once
+              gameState.player.velocity.x = traction.postPushVelocity.x;
+              gameState.player.velocity.y = traction.postPushVelocity.y;
+              // Clear it so we don't apply it again
+              traction.postPushVelocity = undefined;
+            }
+            
+            // Apply normal deceleration for smooth slowdown (whether normal or interrupted)
             const pushForceBase = 0.65;
             const pushProgress = Math.min(1, elapsed / pushDurationMs);
-            const pushForce = pushForceBase * (1 - pushProgress); // Decreasing push force
             
-            const pushAngle = traction.orbitAngle;
-            gameState.player.velocity.x += Math.cos(pushAngle) * pushForce;
-            gameState.player.velocity.y += Math.sin(pushAngle) * pushForce;
+            // Only apply additional push force if we have a valid orbitAngle (normal eject)
+            if (traction.orbitAngle !== undefined) {
+              const pushForce = pushForceBase * (1 - pushProgress); // Decreasing push force
+              gameState.player.velocity.x += Math.cos(traction.orbitAngle) * pushForce;
+              gameState.player.velocity.y += Math.sin(traction.orbitAngle) * pushForce;
+            }
+            
+            // Apply friction/air resistance to gradually slow down (works for both cases)
+            gameState.player.velocity.x *= 0.96;
+            gameState.player.velocity.y *= 0.96;
+            
             // Brief damped spin while ejecting
             if (traction.postPushSpinUntil && now < traction.postPushSpinUntil && traction.postPushSpinVel) {
               gameState.player.rotation += traction.postPushSpinVel;
@@ -3481,6 +1787,20 @@ ctx.strokeStyle = '#ffffff';
               traction.slowMotionActive = false;
               // Clear key states to prevent stuck inputs
               gameState.keys = {};
+              
+              // Spawn next science vessel if needed
+              if (scienceVesselsSpawnedRef.current < scienceVesselsToSpawnRef.current) {
+                const specialAsteroid = gameState.asteroids.find(a => a.special === true);
+                if (specialAsteroid) {
+                  const role = scienceVesselsSpawnedRef.current === 0 ? 'primary' : 'secondary';
+                  const scienceVessel = createScienceVessel(specialAsteroid, role, gameState.stage);
+                  gameState.alienShips.push(scienceVessel);
+                  scienceVesselsSpawnedRef.current++;
+                  
+                  // Show alert for additional vessels
+                  setActionNotes(prev => [...prev, '⚠️ SCIENCE VESSEL APPROACHING!']);
+                }
+              }
               // Restore asteroid velocity
               if (traction.originalAsteroidVelocity && traction.targetAsteroid) {
                 traction.targetAsteroid.velocity.x = traction.originalAsteroidVelocity.x;
@@ -3508,25 +1828,7 @@ ctx.strokeStyle = '#ffffff';
           // Physics integration moved to update(); no-op here.
         }
         
-        const curX = gameState.player.position.x;
-        const curY = gameState.player.position.y;
-        // Detect horizontal wrap edges and update world tile
-        const edgeTol = 4;
-        if (prevX >= CANVAS_WIDTH - edgeTol && curX <= edgeTol) {
-          // moved off right -> appeared on left; advanced one tile to the right
-          gameState.worldTileX = (gameState.worldTileX ?? 0) + 1;
-        } else if (prevX <= edgeTol && curX >= CANVAS_WIDTH - edgeTol) {
-          // moved off left -> appeared on right; moved one tile to the left
-          gameState.worldTileX = (gameState.worldTileX ?? 0) - 1;
-        }
-        // Detect vertical wrap edges and update world tile
-        if (prevY >= CANVAS_HEIGHT - edgeTol && curY <= edgeTol) {
-          // moved off bottom -> appeared on top; advanced one tile down
-          gameState.worldTileY = (gameState.worldTileY ?? 0) + 1;
-        } else if (prevY <= edgeTol && curY >= CANVAS_HEIGHT - edgeTol) {
-          // moved off top -> appeared on bottom; moved one tile up
-          gameState.worldTileY = (gameState.worldTileY ?? 0) - 1;
-        }
+        // Note: tile-step on edge wrap is handled centrally right after updateFrame()
       }
 
       // If music is stopped and user did not pause and we're not muted,
@@ -3537,8 +1839,8 @@ ctx.strokeStyle = '#ffffff';
         armNextTrackOnShotRef.current = true;
       }
 
-      // Thrust sound control: start/ramp while thrust key is held, stop otherwise
-      const thrusting = !!(gameState.keys['ArrowUp'] || gameState.keys['w'] || gameState.keys['W']);
+      // Thrust sound control: start/ramp while thrust key is held, stop otherwise (disabled when paused)
+      const thrusting = !isPausedRef.current && !!(gameState.keys['ArrowUp'] || gameState.keys['w'] || gameState.keys['W']);
       if (thrusting) {
         soundSystem.startThrust();
         const speed = Math.sqrt(gameState.player.velocity.x ** 2 + gameState.player.velocity.y ** 2);
@@ -3575,18 +1877,19 @@ ctx.strokeStyle = '#ffffff';
         const a = createAlienShip(alienDiff, settings.alienSpeedMultiplier);
         // Ensure cue plays if not already (compute pan from position if available)
         if (!alienIncomingCtlRef.current) {
-          const pan = panFromX(a.position.x);
+          const pan = panFromX(a.position.x, CANVAS_WIDTH);
           alienIncomingCtlRef.current = soundSystem.playAlienIncomingDirectional(pan);
         }
-        if (gameState.stage > 1) {
+        // Allow missile-type (bad UFO) only from stage 2 onwards
+        if (gameState.stage >= 2) {
           (a as AlienShip).isMissileType = true;
           (a as AlienShip).spawnAt = Date.now();
           (a as AlienShip).doomStage = 0;
-          soundSystem.playEpicUfo();
-          // Immediately duck/pause music and start bad UFO loop for guaranteed behavior
-          try { soundSystem.setMusicVolume(0.08); } catch { /* ignore */ }
-          try { soundSystem.pauseMusic(); } catch { /* ignore */ }
-          try { badUfoLoopCtlRef.current = soundSystem.startBadUfoLoop(1.0); badUfoActiveRef.current = true; musicFadeResumeFramesRef.current = 0; } catch { /* ignore */ }
+          // Temporarily disable Epic UFO cue and music duck/loop to diagnose freezes
+          // soundSystem.playEpicUfo();
+          // try { soundSystem.setMusicVolume(0.08); } catch { /* ignore */ }
+          // try { soundSystem.pauseMusic(); } catch { /* ignore */ }
+          // try { badUfoLoopCtlRef.current = soundSystem.startBadUfoLoop(1.0); badUfoActiveRef.current = true; musicFadeResumeFramesRef.current = 0; } catch { /* ignore */ }
         }
         gameState.alienShips.push(a);
         gameState.alienSpawnCount++;
@@ -3618,12 +1921,140 @@ ctx.strokeStyle = '#ffffff';
         gameState.alienSpawnCount++;
       }
 
-      // Update bullets
-      gameState.bullets = gameState.bullets
-        .filter(bullet => bullet.life < bullet.maxLife);
+      // Auto-fire logic: shoot straight ahead if target will intersect bullet path
+      if (autoFireEnabledRef.current && gameState.gameRunning && !isPausedRef.current && !anyModalOpen) {
+        const now = performance.now();
+        const AUTO_FIRE_COOLDOWN = 250; // Fire every 250ms (4 shots per second)
+        
+        if (now - lastAutoFireRef.current >= AUTO_FIRE_COOLDOWN) {
+          const player = gameState.player;
+          const BULLET_SPEED = 8; // Bullet velocity
+          const MAX_PREDICTION_TIME = 120; // Predict up to 2 seconds ahead (120 frames at 60fps)
+          const COLLISION_THRESHOLD = 25; // How close bullet needs to be to target
+          
+          // Calculate bullet trajectory from ship's current rotation
+          const bulletDirX = Math.cos(player.rotation);
+          const bulletDirY = Math.sin(player.rotation);
+          
+          let shouldFire = false;
+          let willHitSpecial = false;
+          
+          // Check if bullet path will intersect with any target
+          // First check special asteroids to avoid shooting them
+          for (const asteroid of gameState.asteroids) {
+            if (!asteroid.special) continue;
+            
+            // Predict where special asteroid will be
+            for (let t = 0; t < MAX_PREDICTION_TIME; t++) {
+              const futureAstX = asteroid.position.x + asteroid.velocity.x * t;
+              const futureAstY = asteroid.position.y + asteroid.velocity.y * t;
+              
+              const bulletX = player.position.x + bulletDirX * BULLET_SPEED * t;
+              const bulletY = player.position.y + bulletDirY * BULLET_SPEED * t;
+              
+              const dist = Math.sqrt(
+                Math.pow(bulletX - futureAstX, 2) + Math.pow(bulletY - futureAstY, 2)
+              );
+              
+              if (dist < asteroid.radius + COLLISION_THRESHOLD) {
+                willHitSpecial = true;
+                break;
+              }
+            }
+            if (willHitSpecial) break;
+          }
+          
+          // Don't shoot if it would hit a special asteroid
+          if (!willHitSpecial) {
+            // Check regular asteroids
+            for (const asteroid of gameState.asteroids) {
+              if (asteroid.special) continue;
+              
+              // Predict collision with moving asteroid
+              for (let t = 10; t < MAX_PREDICTION_TIME; t++) { // Start at t=10 to avoid immediate proximity
+                const futureAstX = asteroid.position.x + asteroid.velocity.x * t;
+                const futureAstY = asteroid.position.y + asteroid.velocity.y * t;
+                
+                const bulletX = player.position.x + bulletDirX * BULLET_SPEED * t;
+                const bulletY = player.position.y + bulletDirY * BULLET_SPEED * t;
+                
+                const dist = Math.sqrt(
+                  Math.pow(bulletX - futureAstX, 2) + Math.pow(bulletY - futureAstY, 2)
+                );
+                
+                if (dist < asteroid.radius + COLLISION_THRESHOLD) {
+                  shouldFire = true;
+                  break;
+                }
+              }
+              if (shouldFire) break;
+            }
+            
+            // Check alien ships (they move too, so predict their position)
+            if (!shouldFire) {
+              for (const alien of gameState.alienShips) {
+                for (let t = 10; t < MAX_PREDICTION_TIME; t++) {
+                  const futureAlienX = alien.position.x + alien.velocity.x * t;
+                  const futureAlienY = alien.position.y + alien.velocity.y * t;
+                  
+                  const bulletX = player.position.x + bulletDirX * BULLET_SPEED * t;
+                  const bulletY = player.position.y + bulletDirY * BULLET_SPEED * t;
+                  
+                  const dist = Math.sqrt(
+                    Math.pow(bulletX - futureAlienX, 2) + Math.pow(bulletY - futureAlienY, 2)
+                  );
+                  
+                  if (dist < alien.radius + COLLISION_THRESHOLD) {
+                    shouldFire = true;
+                    break;
+                  }
+                }
+                if (shouldFire) break;
+              }
+            }
+          }
+          
+          // Fire straight ahead if we found a valid target
+          if (shouldFire) {
+            // Use same shooting logic as manual fire (fires in player.rotation direction)
+            if (gameState.stage === 1) {
+              const spread = 0.10;
+              gameState.bullets.push(createBullet(player.position, player.rotation));
+              gameState.bullets.push(createBullet(player.position, player.rotation - spread));
+              gameState.bullets.push(createBullet(player.position, player.rotation + spread));
+            } else {
+              const stacks = player.doubleShooterStacks || 0;
+              if (player.doubleShooter > 0 && stacks >= 2) {
+                const spread = 0.12;
+                const angles = [
+                  player.rotation - spread * 1.5,
+                  player.rotation - spread * 0.5,
+                  player.rotation + spread * 0.5,
+                  player.rotation + spread * 1.5,
+                ];
+                for (const a of angles) gameState.bullets.push(createBullet(player.position, a));
+              } else if (player.doubleShooter > 0 && stacks >= 1) {
+                const spread = 0.12;
+                gameState.bullets.push(createBullet(player.position, player.rotation - spread));
+                gameState.bullets.push(createBullet(player.position, player.rotation + spread));
+              } else {
+                gameState.bullets.push(createBullet(player.position, player.rotation));
+              }
+            }
+            
+            soundSystem.playPlayerShoot();
+            lastAutoFireRef.current = now;
+          }
+        }
+      }
 
-      // Update alien bullets
-      gameState.alienBullets = gameState.alienBullets.map(b => {
+      // Update bullets (only if game is running or auto-destruction is active)
+      if (gameState.gameRunning || autoDestructionActiveRef.current) {
+        gameState.bullets = gameState.bullets
+          .filter(bullet => bullet.life < bullet.maxLife);
+
+        // Update alien bullets
+        gameState.alienBullets = gameState.alienBullets.map(b => {
           // Homing missile steering
           if (b.homing) {
             const speed = Math.hypot(b.velocity.x, b.velocity.y) || 1;
@@ -3643,30 +2074,58 @@ ctx.strokeStyle = '#ffffff';
             b.lostFrames = (b.lostFrames || 0) + (offTarget ? 1 : -1);
             if (b.lostFrames! < 0) b.lostFrames = 0;
             if (offTarget && b.lostFrames! > 24) {
-              // Self-destruct: spawn white/red debris and remove
-              const boom = createExplosion(b.position);
-              // Recolor to white/red and add more particles
-              boom.particles.forEach(p => { p.color = Math.random() < 0.5 ? '#ffffff' : '#ff3333'; p.maxLife += 20; });
-              for (let i = 0; i < 120; i++) {
-                boom.particles.push({
-                  position: { x: b.position.x, y: b.position.y },
-                  velocity: { x: (Math.random() - 0.5) * 8, y: (Math.random() - 0.5) * 8 },
-                  life: 0,
-                  maxLife: 40 + Math.floor(Math.random() * 40),
-                  size: 2 + Math.random() * 3,
-                  color: Math.random() < 0.5 ? '#ffffff' : '#ff3333',
-                });
-              }
-              gameState.explosions.push(boom);
-              soundSystem.playMissileExplosion();
+              // Self-destruct: use lightweight burst to avoid heavy fireworks
+              const boomLite = createUfoSuperExplosionLight(b.position, env as any);
+              gameState.explosions.push(boomLite);
+              // SFX handled by factory; no debris
+              // Note: do not call suspendTrails here; this is the alien bullet path and
+              // the helper is defined later for player missile logic. Removing avoids
+              // a temporal initialization ReferenceError and unnecessary work.
               // Mark bullet as expired immediately
               b.life = b.maxLife;
+            }
+
+            // Block on asteroids (detonate, no asteroid damage)
+            if (b.life < b.maxLife) {
+              for (const a of gameState.asteroids) {
+                const dx = a.position.x - b.position.x;
+                const dy = a.position.y - b.position.y;
+                if (Math.hypot(dx, dy) < ((a.radius || 12) + (b.radius || 4))) {
+                  const boomLite = createUfoSuperExplosionLight(b.position, env as any);
+                  gameState.explosions.push(boomLite);
+                  b.life = b.maxLife; // expire
+                  break;
+                }
+              }
+            }
+
+            // Proximity to player: 50% chance to hit on reach
+            if (b.life < b.maxLife) {
+              const pdx = gameState.player.position.x - b.position.x;
+              const pdy = gameState.player.position.y - b.position.y;
+              const pr = 12; // approximate player radius
+              if (Math.hypot(pdx, pdy) < pr + (b.radius || 4)) {
+                const hit = Math.random() < 0.5;
+                const boomLite = createUfoSuperExplosionLight(b.position, env as any);
+                gameState.explosions.push(boomLite);
+                if (hit) {
+                  gameState.player.health = Math.max(0, (gameState.player.health || 0) - MISSILE_HIT_DAMAGE);
+                  // Screen shake on player damage
+                  triggerScreenShake(screenShakeRef, screenShakeStartRef, 6, 250);
+                }
+                b.life = b.maxLife; // expire either way
+              }
             }
           }
           // Physics integration moved to update(); return as-is.
           return b;
         })
         .filter(bullet => bullet.life < bullet.maxLife);
+      } else {
+        // Game over: clear all bullets
+        gameState.bullets = [];
+        gameState.alienBullets = [];
+      }
 
       // Helper: select highest priority target for player missile
       // Priority: (1) UFOs (missile-type first, then highest health), (2) closest large asteroid, else null (no lock)
@@ -3696,6 +2155,29 @@ ctx.strokeStyle = '#ffffff';
       };
 
       // Update player missiles: smarter targeting, record path history, emit smoke; handle hits
+      // Local FX config and safe trail suspension helper (no-op if shadows enabled)
+      const __fxCfg = getFxConfig(env as any);
+      const suspendTrails = (
+        refs: {
+          trailsSuspendUntilRef: React.MutableRefObject<number | undefined>;
+          trailsFadeInStartRef: React.MutableRefObject<number | undefined>;
+          trailsEnabledRef: React.MutableRefObject<boolean>;
+          trailsStrengthRef: React.MutableRefObject<number>;
+          lastMissileEventRef: React.MutableRefObject<number | undefined>;
+        },
+        untilMs: number
+      ) => {
+        // Only apply when shadows are disabled per FX config; otherwise no-op
+        const disableTrails = __fxCfg && (__fxCfg as any).enableShadows === false;
+        if (!disableTrails) return;
+        try {
+          const nowMs = performance.now();
+          if (typeof refs.trailsSuspendUntilRef.current !== 'number') refs.trailsSuspendUntilRef.current = 0;
+          refs.trailsSuspendUntilRef.current = Math.max(refs.trailsSuspendUntilRef.current!, untilMs);
+          refs.trailsFadeInStartRef.current = nowMs;
+          refs.lastMissileEventRef.current = nowMs;
+        } catch { /* Ignore star generation errors */ }
+      };
       if (!gameState.playerMissiles) gameState.playerMissiles = [];
       gameState.playerMissiles = gameState.playerMissiles
         .map((m: AlienBullet) => {
@@ -3774,26 +2256,71 @@ ctx.strokeStyle = '#ffffff';
               }
               if (collided) {
                 const hit = collided.obj;
-                const boom = createExplosion({ x: hit.position.x, y: hit.position.y });
-                for (let i = 0; i < 60; i++) {
-                  boom.particles.push({
-                    position: { x: hit.position.x, y: hit.position.y },
-                    velocity: { x: (Math.random() - 0.5) * 7, y: (Math.random() - 0.5) * 7 },
-                    life: 0,
-                    maxLife: 40 + Math.floor(Math.random() * 50),
-                    size: 2 + Math.random() * 3,
-                    color: Math.random() < 0.5 ? '#ffffff' : '#ff6666',
-                  });
-                }
-                gameState.explosions.push(boom);
-                soundSystem.playMissileExplosion();
+                // Lightweight burst for incidental missile collision to avoid fireworks pause
+                const boomLite1 = createUfoSuperExplosionLight({ x: hit.position.x, y: hit.position.y }, env as any);
+                gameState.explosions.push(boomLite1);
+                // SFX handled by factory; do not double-play here
+                // Suspend trails on player missile incidental impact (1s window)
+                suspendTrails({
+                  trailsSuspendUntilRef,
+                  trailsFadeInStartRef,
+                  trailsEnabledRef,
+                  trailsStrengthRef,
+                  lastMissileEventRef,
+                }, performance.now() + 1000);
                 // Apply 20% of max health damage to the incidental object
                 if (collided.kind === 'alien') {
                   const maxH = Math.max(1, hit.maxHealth || hit.health || 1);
                   const dmg = maxH * 0.2;
                   hit.health = Math.max(0, (hit.health || maxH) - dmg);
                   if (hit.health <= 0) {
+                    const boom = (hit as any).isMissileType
+                      ? createMotherShipExplosion({ x: hit.position.x, y: hit.position.y }, env as any)
+                      : createAlienExplosion({ x: hit.position.x, y: hit.position.y }, env as any);
+                    gameState.explosions.push(boom);
+                    if ((hit as any).isMissileType) {
+                      const ex = { x: hit.position.x, y: hit.position.y };
+                      const suckR = 180;
+                      const breakR = 36;
+                      const toBreak: Asteroid[] = [];
+                      for (const a of gameState.asteroids) {
+                        const dx = ex.x - a.position.x; const dy = ex.y - a.position.y;
+                        const d = Math.hypot(dx, dy) || 1;
+                        if (d < suckR) {
+                          const ux = dx / d, uy = dy / d;
+                          const s = (1 - d / suckR) * (a.size === 'large' ? 0.25 : a.size === 'medium' ? 0.35 : 0.45);
+                          a.velocity = addVectors(a.velocity, { x: ux * s, y: uy * s });
+                          if (d < breakR) toBreak.push(a);
+                        }
+                      }
+                      for (const a of toBreak) {
+                        const idx = gameState.asteroids.indexOf(a);
+                        if (idx >= 0) {
+                          const fragments = splitAsteroid(a).map(fragment => {
+                            if (gameState.stage === 1) fragment.velocity = multiplyVector(fragment.velocity, 0.6);
+                            else if (gameState.stage >= 3) fragment.velocity = multiplyVector(fragment.velocity, 1.2);
+                            return fragment;
+                          });
+                          spawnAsteroidDebris(a);
+                          if (a.size === 'large') spawnAsteroidDebris(a);
+                          gameState.asteroids.splice(idx, 1);
+                          gameState.asteroids.push(...fragments);
+                          const points = a.size === 'large' ? 20 : a.size === 'medium' ? 50 : 100;
+                          gameState.score += points;
+                          setScore(gameState.score);
+                        }
+                      }
+                    }
+                    try {
+                      const panProvider = () => {
+                        const nx = (hit.position.x / CANVAS_WIDTH) * 2 - 1;
+                        return Math.max(-1, Math.min(1, nx));
+                      };
+                      soundSystem.playAlienDestroyPanned(panProvider);
+                    } catch { /* ignore */ }
                     gameState.alienShips = gameState.alienShips.filter(s => s !== hit);
+                    gameState.score += 200;
+                    setScore(gameState.score);
                   }
                 } else {
                   const maxH = Math.max(1, hit.maxHealth || hit.health || 1);
@@ -3825,27 +2352,63 @@ ctx.strokeStyle = '#ffffff';
             const dx = baseTx - m.position.x; const dy = baseTy - m.position.y;
             const dist = Math.hypot(dx, dy);
             if (dist < ((targetObj.radius || 6) + 10)) {
-              const boom = createExplosion({ x: targetObj.position.x, y: targetObj.position.y });
-              // Fewer extra particles to avoid wash
-              for (let i = 0; i < 90; i++) {
-                boom.particles.push({
-                  position: { x: targetObj.position.x, y: targetObj.position.y },
-                  velocity: { x: (Math.random() - 0.5) * 9, y: (Math.random() - 0.5) * 9 },
-                  life: 0,
-                  maxLife: 50 + Math.floor(Math.random() * 60),
-                  size: 2 + Math.random() * 3.5,
-                  color: Math.random() < 0.5 ? '#ffffff' : '#ff3333',
-                });
-              }
-              gameState.explosions.push(boom);
-              soundSystem.playMissileExplosion();
+              // Lightweight burst for primary missile impact on target
+              const boomLite2 = createUfoSuperExplosionLight({ x: targetObj.position.x, y: targetObj.position.y }, env as any);
+              gameState.explosions.push(boomLite2);
+              // SFX handled by factory; do not double-play here
               if (targetType === 'alien') {
                 // Random damage between 20% and 50% of max health
                 const maxH = Math.max(1, targetObj.maxHealth || targetObj.health || 1);
                 const dmg = maxH * (0.2 + Math.random() * 0.3);
                 targetObj.health = Math.max(0, (targetObj.health || maxH) - dmg);
                 if (targetObj.health <= 0) {
+                  const boom = (targetObj as any).isMissileType
+                    ? createMotherShipExplosion({ x: targetObj.position.x, y: targetObj.position.y }, env as any)
+                    : createAlienExplosion({ x: targetObj.position.x, y: targetObj.position.y }, env as any);
+                  gameState.explosions.push(boom);
+                  if ((targetObj as any).isMissileType) {
+                    const ex = { x: targetObj.position.x, y: targetObj.position.y };
+                    const suckR = 180;
+                    const breakR = 36;
+                    const toBreak: Asteroid[] = [];
+                    for (const a of gameState.asteroids) {
+                      const dx = ex.x - a.position.x; const dy = ex.y - a.position.y;
+                      const d = Math.hypot(dx, dy) || 1;
+                      if (d < suckR) {
+                        const ux = dx / d, uy = dy / d;
+                        const s = (1 - d / suckR) * (a.size === 'large' ? 0.25 : a.size === 'medium' ? 0.35 : 0.45);
+                        a.velocity = addVectors(a.velocity, { x: ux * s, y: uy * s });
+                        if (d < breakR) toBreak.push(a);
+                      }
+                    }
+                    for (const a of toBreak) {
+                      const idx = gameState.asteroids.indexOf(a);
+                      if (idx >= 0) {
+                        const fragments = splitAsteroid(a).map(fragment => {
+                          if (gameState.stage === 1) fragment.velocity = multiplyVector(fragment.velocity, 0.6);
+                          else if (gameState.stage >= 3) fragment.velocity = multiplyVector(fragment.velocity, 1.2);
+                          return fragment;
+                        });
+                        spawnAsteroidDebris(a);
+                        if (a.size === 'large') spawnAsteroidDebris(a);
+                        gameState.asteroids.splice(idx, 1);
+                        gameState.asteroids.push(...fragments);
+                        const points = a.size === 'large' ? 20 : a.size === 'medium' ? 50 : 100;
+                        gameState.score += points;
+                        setScore(gameState.score);
+                      }
+                    }
+                  }
+                  try {
+                    const panProvider = () => {
+                      const nx = (targetObj.position.x / CANVAS_WIDTH) * 2 - 1;
+                      return Math.max(-1, Math.min(1, nx));
+                    };
+                    soundSystem.playAlienDestroyPanned(panProvider);
+                  } catch { /* ignore */ }
                   gameState.alienShips = gameState.alienShips.filter(s => s !== targetObj);
+                  gameState.score += 200;
+                  setScore(gameState.score);
                 }
               } else if (targetType === 'asteroid') {
                 // Special large asteroid: apply damage and spawn distortion pulse on each hit; bigger pulse on break
@@ -3907,7 +2470,9 @@ ctx.strokeStyle = '#ffffff';
         .filter(bullet => bullet.life < bullet.maxLife);
 
       // Update alien ships and handle their shooting
-      gameState.alienShips = gameState.alienShips.map(ship => {
+      // Only update if game is running or auto-destruction is active
+      if (gameState.gameRunning || autoDestructionActiveRef.current) {
+        gameState.alienShips = gameState.alienShips.map(ship => {
         const updated = ship; // Physics integration moved to update(); ship already updated
         // If UFO collides with an asteroid, knock it off path and set knockedTimer to force recalculation
         for (const a of gameState.asteroids) {
@@ -3942,8 +2507,159 @@ ctx.strokeStyle = '#ffffff';
           soundSystem.playAlienEngine(distanceToPlayer);
         }
         
+        // Science vessel AI: fly toward Flipit asteroid, dock, scan, and steal
+        if ((updated as AlienShip).isScienceVessel) {
+          const state = (updated as AlienShip).scienceState || 'approaching';
+          
+          if (state === 'fleeing') {
+            // Stolen the Flipit, now escaping off screen
+            const centerX = CANVAS_WIDTH / 2;
+            const centerY = CANVAS_HEIGHT / 2;
+            const escapeDx = updated.position.x - centerX;
+            const escapeDy = updated.position.y - centerY;
+            const escapeDist = Math.sqrt(escapeDx * escapeDx + escapeDy * escapeDy) || 1;
+            const escapeSpeed = 3.0; // Fast escape
+            updated.velocity.x = (escapeDx / escapeDist) * escapeSpeed;
+            updated.velocity.y = (escapeDy / escapeDist) * escapeSpeed;
+          } else if (state === 'patrolling' || state === 'hiding') {
+            // Secondary vessel waiting - check if primary vessel is still active
+            const role = (updated as AlienShip).scienceRole;
+            if (role === 'secondary') {
+              // Check if any primary vessels are still docking/approaching
+              const primaryActive = gameState.alienShips.some((ship: any) => 
+                ship.isScienceVessel && 
+                ship.scienceRole === 'primary' &&
+                (ship.scienceState === 'approaching' || ship.scienceState === 'docking')
+              );
+              
+              if (!primaryActive) {
+                // Primary is gone or fled - switch to approaching!
+                (updated as AlienShip).scienceState = 'approaching';
+                setActionNotes(prev => [...prev, '⚠️ Another science vessel approaching!']);
+              }
+            }
+            
+            // Circle around edges while waiting
+            const centerX = CANVAS_WIDTH / 2;
+            const centerY = CANVAS_HEIGHT / 2;
+            const orbitAngle = (Date.now() * 0.001) % (Math.PI * 2);
+            const orbitRadius = 350;
+            const targetX = centerX + Math.cos(orbitAngle) * orbitRadius;
+            const targetY = centerY + Math.sin(orbitAngle) * orbitRadius;
+            const dx = targetX - updated.position.x;
+            const dy = targetY - updated.position.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const speed = updated.speed || 1.0;
+            updated.velocity.x = (dx / dist) * speed;
+            updated.velocity.y = (dy / dist) * speed;
+          } else {
+            // Approaching or docking
+            const specialAsteroid = gameState.asteroids.find(a => a.special === true);
+            if (specialAsteroid) {
+              const targetDx = specialAsteroid.position.x - updated.position.x;
+              const targetDy = specialAsteroid.position.y - updated.position.y;
+              const targetDistance = Math.sqrt(targetDx * targetDx + targetDy * targetDy);
+              const dockingRange = 80; // Range to start docking
+              
+              if (state === 'docking') {
+                // Stay near asteroid while scanning
+                if (targetDistance > dockingRange + 20) {
+                  // Move back closer if drifted away
+                  const ux = targetDx / (targetDistance || 1);
+                  const uy = targetDy / (targetDistance || 1);
+                  updated.velocity.x = ux * 0.5;
+                  updated.velocity.y = uy * 0.5;
+                } else {
+                  // Hold position
+                  updated.velocity.x *= 0.9;
+                  updated.velocity.y *= 0.9;
+                }
+                
+                // Update scan progress - duration varies by stage
+                let scanDuration = 3000; // Base: 3 seconds
+                if (gameState.stage === 1) {
+                  scanDuration = 12000; // Stage 1: 4x longer (12 seconds)
+                } else if (gameState.stage === 2) {
+                  scanDuration = 9000; // Stage 2: 3x longer (9 seconds)
+                } else if (gameState.stage >= 3 && gameState.stage <= 5) {
+                  scanDuration = 6000; // Stage 3-5: 2x longer (6 seconds)
+                }
+                // Stage 6+: normal speed (3 seconds)
+                
+                if (!(updated as AlienShip).scienceDockStartTime) {
+                  (updated as AlienShip).scienceDockStartTime = Date.now();
+                  (updated as AlienShip).scienceDockProgress = 0;
+                }
+                
+                const elapsed = Date.now() - ((updated as AlienShip).scienceDockStartTime || Date.now());
+                const progress = Math.min(100, (elapsed / scanDuration) * 100);
+                (updated as AlienShip).scienceDockProgress = progress;
+                
+                // Check if scan is complete
+                if (progress >= 100 && !(updated as AlienShip).scienceStealAttempted) {
+                  (updated as AlienShip).scienceStealAttempted = true;
+                  (updated as AlienShip).scienceState = 'fleeing';
+                  
+                  // Remove the Flipit from the asteroid and mark as hacked
+                  specialAsteroid.special = false;
+                  (specialAsteroid as any).flipitChance = undefined;
+                  (specialAsteroid as any).specialState = 'hacked';
+                  
+                  // Clear current artifact
+                  if (gameState.currentArtifact?.type === 'Flipit') {
+                    gameState.currentArtifact = undefined;
+                  }
+                  
+                  // Show message
+                  setActionNotes(prev => [...prev, '🚨 FLIPIT STOLEN! Science vessel escaping!']);
+                }
+              } else if (targetDistance <= dockingRange && state === 'approaching') {
+                // Check if player is docked on this asteroid - kick them off!
+                const traction = tractionBeamRef.current;
+                if (traction && traction.active && traction.targetAsteroid === specialAsteroid) {
+                  // NEW: Instead of high-speed ejection, apply reversed controls + bubble effect
+                  const now = Date.now();
+                  reversedControlsUntilRef.current = now + 10000; // 10 seconds of reversed controls
+                  bubbleEffectUntilRef.current = now + 10000; // 10 seconds of bubble visual
+                  
+                  // End traction immediately
+                  traction.active = false;
+                  traction.slowMotionActive = false;
+                  traction.targetAsteroid = null;
+                  
+                  // Clear key states to prevent stuck inputs
+                  gameState.keys = {};
+                  
+                  // Impact/bounce sound
+                  try { soundSystem.playBounce(); } catch { /* no-op */ }
+                  
+                  // Restore music volume
+                  soundSystem.setMusicVolume(1.0);
+                  
+                  setActionNotes(prev => [...prev, '🚨 CONTROLS SCRAMBLED! Science vessel hacked your ship!']);
+                }
+                
+                // Start docking
+                (updated as AlienShip).scienceState = 'docking';
+                (updated as AlienShip).scienceDockStartTime = Date.now();
+                (updated as AlienShip).scienceDockProgress = 0;
+                setActionNotes(prev => [...prev, '⚠️ Science vessel docking! Destroy it quickly!']);
+              } else {
+                // Fly toward the Flipit asteroid
+                if (targetDistance > 0) {
+                  const ux = targetDx / targetDistance;
+                  const uy = targetDy / targetDistance;
+                  const speed = updated.speed || 1.0;
+                  updated.velocity.x = ux * speed;
+                  updated.velocity.y = uy * speed;
+                }
+              }
+            }
+          }
+        }
+        
         // Missile-type standoff movement, doom sequence, and lock/launch timeline
-        if ((updated as AlienShip).isMissileType) {
+        else if ((updated as AlienShip).isMissileType) {
           // Track lifetime frames for deterministic timing
           (updated as AlienShip).aliveFrames = ((updated as AlienShip).aliveFrames || 0) + 1;
           const desiredMin = 380;
@@ -3962,6 +2678,8 @@ ctx.strokeStyle = '#ffffff';
             updated.velocity.y += uy * 0.12;
           }
 
+          // Perf probe start (missile-type UFO update)
+          const __pf_t0 = performance.now();
           // Doom sequence progression (after 30s alive)
           if (typeof (updated as AlienShip).spawnAt !== 'number') {
             (updated as AlienShip).spawnAt = Date.now();
@@ -4039,6 +2757,7 @@ ctx.strokeStyle = '#ffffff';
                 const missProb = Math.max(0.1, 0.6 - acc);
                 const miss = Math.random() < missProb;
                 const missile: AlienBullet = createAlienBullet(updated.position, angleToPlayer);
+                (missile as any).owner = 'alien';
                 missile.homing = true;
                 missile.turnRate = 0.06;
                 const baseSpeed = 3.0;
@@ -4061,10 +2780,123 @@ ctx.strokeStyle = '#ffffff';
                 (updated as AlienShip).lockLatched = true;
                 (updated as AlienShip).lockLatchedTimer = Math.max((updated as AlienShip).lockLatchedTimer || 0, 240);
                 // Play lock/launch cue now that lock is confirmed
-                soundSystem.playMissileWarning();
+                const us2 = updated as AlienShip;
+                if (!((us2 as any)._warnedOnce === true)) {
+                  soundSystem.playMissileWarning();
+                  (us2 as any)._warnedOnce = true;
+                } else {
+                  try { soundSystem.playMissileStage2?.(); } catch { /* no-op */ }
+                }
                 soundSystem.playMissileLaunch();
                 gameState.alienBullets.push(missile);
               }
+            }
+          }
+
+          // Occasional line-of-sight laser: low-cost, short-lived beam, half missile damage
+          {
+            const us = updated as any;
+            us._laserCd = Math.max(0, us._laserCd || 0);
+            if (us._laserCd === 0) {
+              // 1 in ~90 chance per frame if LOS is clear and player is within mid-range
+              const px = gameState.player.position.x; const py = gameState.player.position.y;
+              const distToPlayer = Math.hypot(px - updated.position.x, py - updated.position.y);
+              const tryLaser = distToPlayer >= 180 && distToPlayer <= 720 && Math.random() < 1 / 90;
+              if (tryLaser) {
+                const hasLOS = (() => {
+                  // Segment-circle test against large/medium asteroids; skip tiny debris
+                  const x1 = updated.position.x, y1 = updated.position.y;
+                  const x2 = px, y2 = py;
+                  const dx = x2 - x1, dy = y2 - y1;
+                  const len2 = dx * dx + dy * dy || 1;
+                  for (const a of gameState.asteroids) {
+                    const r = (a.radius || 0);
+                    if (r < 10) continue; // ignore small
+                    const fx = a.position.x - x1, fy = a.position.y - y1;
+                    const t = Math.max(0, Math.min(1, (fx * dx + fy * dy) / len2));
+                    const cx = x1 + dx * t, cy = y1 + dy * t;
+                    const d = Math.hypot(a.position.x - cx, a.position.y - cy);
+                    if (d < r) return false; // blocked
+                  }
+                  return true;
+                })();
+                if (hasLOS) {
+                  // Pre-fire warmup glow at UFO nose (brief charge-up)
+                  if (!Array.isArray((gameState as any).alienLasers)) (gameState as any).alienLasers = [];
+                  (gameState as any).alienLasers.push({
+                    kind: 'warmup',
+                    from: { x: updated.position.x, y: updated.position.y },
+                    to: { x: updated.position.x, y: updated.position.y },
+                    life: 0,
+                    maxLife: 10,
+                    width: 4,
+                  });
+                  // Spawn a beam that lasts twice as long
+                  if (!Array.isArray((gameState as any).alienLasers)) (gameState as any).alienLasers = [];
+                  (gameState as any).alienLasers.push({
+                    from: { x: updated.position.x, y: updated.position.y },
+                    to: { x: px, y: py },
+                    life: 0,
+                    maxLife: 16,
+                    width: 2,
+                    color: '#ff3b7a'
+                  });
+                  // Apply damage instantly: half missile hit
+                  gameState.player.health = Math.max(0, (gameState.player.health || 0) - LASER_HIT_DAMAGE);
+                  // Emit small black debris with red edges from the ship on laser hit (cap per-event)
+                  if (!Array.isArray((gameState as any).visualDebris)) (gameState as any).visualDebris = [];
+                  const __fxCfg = getFxConfig((env as any) || undefined);
+                  const __cap = Math.max(0, Number(__fxCfg.laserHitDebrisMax ?? 60));
+                  const __count = Math.min(10, __cap);
+                  for (let i = 0; i < __count; i++) {
+                    const ang = Math.random() * Math.PI * 2;
+                    const spd = 1 + Math.random() * 2.5;
+                    (gameState as any).visualDebris.push({
+                      kind: 'chunk',
+                      position: { x: px, y: py },
+                      velocity: { x: Math.cos(ang) * spd, y: Math.sin(ang) * spd },
+                      life: 0,
+                      maxLife: 24 + Math.floor(Math.random() * 10),
+                      size: 3 + Math.random() * 2,
+                      color: '#000000',
+                      edgeColor: '#ff3333',
+                      rotation: Math.random() * Math.PI * 2,
+                      rotationSpeed: (Math.random() - 0.5) * 0.2,
+                    });
+                  }
+                  // Small nudge to indicate impact (no heavy FX)
+                  try { soundSystem.playAlienLaser?.(); } catch {}
+                  // Cooldown (2–3 seconds)
+                  (us as any)._laserCd = 120 + Math.floor(Math.random() * 60);
+                }
+              }
+            } else {
+              (us as any)._laserCd = Math.max(0, (us as any)._laserCd - 1);
+            }
+          }
+
+          // Missile fallback: ensure missiles appear even if lock conditions are not perfect
+          {
+            const us = updated as AlienShip;
+            (us as any)._missileCd = Math.max(0, (us as any)._missileCd || 0);
+            if ((us as any)._missileCd === 0) {
+              const px = gameState.player.position.x; const py = gameState.player.position.y;
+              const angleToPlayer = Math.atan2(py - updated.position.y, px - updated.position.x);
+              const missile: AlienBullet = createAlienBullet(updated.position, angleToPlayer);
+              missile.homing = true;
+              missile.turnRate = 0.06;
+              missile.velocity = multiplyVector({ x: Math.cos(angleToPlayer), y: Math.sin(angleToPlayer) }, 3.0);
+              missile.radius = 4;
+              missile.maxLife = 240;
+              missile.damageMultiplier = 2;
+              missile.explosionRadius = 60;
+              missile.locked = true; missile.lostFrames = 0; missile.selfDestruct = 180;
+              missile.targetOffsetX = 0; missile.targetOffsetY = 0;
+              gameState.alienBullets.push(missile);
+              // Faster cadence for testing: 0.8–1.2s between fallback missiles
+              (us as any)._missileCd = 48 + Math.floor(Math.random() * 24);
+            } else {
+              (us as any)._missileCd = Math.max(0, (us as any)._missileCd - 1);
             }
           }
         }
@@ -4110,7 +2942,23 @@ ctx.strokeStyle = '#ffffff';
         }
         
         return updated;
+      })
+      // Remove science vessels that have fled off-screen
+      .filter(ship => {
+        if ((ship as AlienShip).isScienceVessel && (ship as AlienShip).scienceState === 'fleeing') {
+          // Check if ship is well off-screen (add buffer beyond canvas edges)
+          const buffer = 100; // Extra distance beyond screen edge
+          const isOffScreen = 
+            ship.position.x < -buffer ||
+            ship.position.x > CANVAS_WIDTH + buffer ||
+            ship.position.y < -buffer ||
+            ship.position.y > CANVAS_HEIGHT + buffer;
+          
+          return !isOffScreen; // Keep ship if NOT off-screen, remove if off-screen
+        }
+        return true; // Keep all non-fleeing ships
       });
+      }
 
       // Decrement lock-latched timers and post-process doom completions
       (gameState.alienShips as AlienShip[]).forEach(s => {
@@ -4125,10 +2973,9 @@ ctx.strokeStyle = '#ffffff';
       (gameState.alienShips as AlienShip[]).forEach(s => {
         if (s.isMissileType && s.doomStage === 4) {
           const cx = CANVAS_WIDTH / 2, cy = CANVAS_HEIGHT / 2;
-          // Flash effect
-          const flash = createExplosion({ x: cx, y: cy });
-          flash.particles.forEach(p => { p.color = '#ffffff'; p.size *= 2; p.maxLife += 20; });
-          gameState.explosions.push(flash);
+          // Flash effect (lightweight to avoid stall)
+          const flashLite = createUfoSuperExplosionLight({ x: cx, y: cy }, env as any);
+          gameState.explosions.push(flashLite);
           // Spawn 5 normal UFOs in a star pattern
           const settings = getDifficultySettings();
           for (let i = 0; i < 5; i++) {
@@ -4146,47 +2993,14 @@ ctx.strokeStyle = '#ffffff';
       });
       gameState.alienShips = survivors.concat(spawnList);
 
-      // === Bad UFO music logic ===
+      // === Bad UFO music logic (disabled for perf diagnostics) ===
       const hasMissileUfo = (gameState.alienShips as AlienShip[]).some(s => s.isMissileType);
-      if (hasMissileUfo && !badUfoActiveRef.current) {
-        // Duck quickly and pause the stage music, then start the bad UFO loop
-        try { soundSystem.setMusicVolume(0.08); } catch { /* ignore */ }
-        // Capture current playback index and offset so we can resume from the same spot later
-        try {
-          const info = soundSystem.getPlaybackInfo();
-          if (typeof info.index === 'number' && typeof info.offsetSec === 'number') {
-            badUfoMusicMemRef.current = { index: info.index, offsetSec: Math.max(0, info.offsetSec) };
-          }
-        } catch { /* ignore */ }
-        try { soundSystem.pauseMusic(); } catch { /* ignore */ }
-        badUfoLoopCtlRef.current = soundSystem.startBadUfoLoop(1.0);
-        badUfoActiveRef.current = true;
-        musicFadeResumeFramesRef.current = 0;
-      } else if (!hasMissileUfo && badUfoActiveRef.current) {
-        // Bad UFO gone: fade loop, play victory cue, resume and fade music back up
-        try { soundSystem.fadeOutBadUfoLoop(1000); } catch { /* ignore */ }
+      // Bypass all pause/duck/loop logic to rule out audio stalls
+      if (!hasMissileUfo && badUfoActiveRef.current) {
         badUfoLoopCtlRef.current = null;
-        // Use an existing strong cue as a victory placeholder
-        try { soundSystem.playLargeAsteroidDestroy(); } catch { /* ignore */ }
-        // Rewind song to the exact position we captured when the scene began
-        try {
-          if (badUfoMusicMemRef.current) {
-            soundSystem.setResumePoint(badUfoMusicMemRef.current.index, badUfoMusicMemRef.current.offsetSec);
-          }
-        } catch { /* ignore */ }
-        try { soundSystem.resumeMusic(); soundSystem.setMusicVolume(0.1); } catch { /* ignore */ }
         badUfoMusicMemRef.current = null;
-        musicFadeResumeFramesRef.current = 180; // 3 seconds fade-up
+        musicFadeResumeFramesRef.current = 0;
         badUfoActiveRef.current = false;
-      }
-
-      // Smoothly fade music back up after resume
-      if (musicFadeResumeFramesRef.current > 0) {
-        const left = musicFadeResumeFramesRef.current;
-        const t = 1 - left / 180;
-        const vol = 0.1 + t * (1.0 - 0.1);
-        try { soundSystem.setMusicVolume(vol); } catch { /* ignore */ }
-        musicFadeResumeFramesRef.current = Math.max(0, left - 1);
       }
 
       // Handle large-asteroid vs large-asteroid collisions (bounce without damage)
@@ -4347,6 +3161,28 @@ ctx.strokeStyle = '#ffffff';
         if (checkCollision(gameState.player, bonus)) {
           // Capture pickup position for panned SFX before removing
           const pickupX = bonus.position.x;
+          
+          // First-time reward notification
+          const rewardNames: Record<string, string> = {
+            shield: 'SHIELD',
+            heal: 'HEAL',
+            doubleShooter: 'DOUBLE SHOOTER',
+            missile: 'MISSILE'
+          };
+          
+          if (!seenRewardsRef.current.has(bonus.type)) {
+            seenRewardsRef.current.add(bonus.type);
+            const notificationText = rewardNames[bonus.type] || bonus.type.toUpperCase();
+            setRewardNotifications(prev => [...prev, {
+              id: Date.now(),
+              text: notificationText,
+              x: gameState.player.position.x,
+              y: gameState.player.position.y - 60,
+              startTime: Date.now(),
+              duration: 1500 // 1.5 seconds
+            }]);
+          }
+          
           // Remove bonus
           gameState.bonuses.splice(i, 1);
           
@@ -4425,12 +3261,15 @@ ctx.strokeStyle = '#ffffff';
             else if (r < 0.8) amount = 2;
             else if (r < 0.9) amount = 3;
             else amount = 4;
-            // Spawn one mini-missile icon per amount that hovers then flies to the first empty HUD slot
+            // Spawn one mini-missile icon per amount that hovers then flies to the first empty HUD slot (bottom-left)
             if (!gameState.missilePopups) gameState.missilePopups = [];
             const nowMs = Date.now();
             const maxIcons = 5;
-            const iconX0 = CANVAS_WIDTH - 180;
-            const iconY = 120;
+            const marginX = 20;
+            const energyBarY = CANVAS_HEIGHT - 40;
+            const iconsTopY = energyBarY - 44;
+            const iconX0 = marginX;
+            const iconY = iconsTopY;
             const gap = 26;
             // Determine how many slots appear occupied including in-flight reservations
             const pAny = gameState.player as any;
@@ -4444,8 +3283,8 @@ ctx.strokeStyle = '#ffffff';
               if (occupied < maxIcons) {
                 slotIndex = occupied; // next empty slot
               }
-              const targetX = typeof slotIndex === 'number' ? (iconX0 + slotIndex * gap) : (iconX0 + (maxIcons - 1) * gap);
-              const targetY = iconY;
+              const targetX = iconX0;
+              const targetY = typeof slotIndex === 'number' ? (iconY - slotIndex * gap) : (iconY - (maxIcons - 1) * gap);
               const pop = {
                 id: Math.floor(Math.random() * 1e9),
                 amount: 1,
@@ -4485,51 +3324,97 @@ ctx.strokeStyle = '#ffffff';
       if (gameState.healEffect > 0) {
         gameState.healEffect--;
       }
+      
+      // Cleanup expired reward notifications
+      setRewardNotifications(prev => {
+        const now = Date.now();
+        return prev.filter(notif => (now - notif.startTime) < notif.duration);
+      });
 
-      // Update explosions
-      gameState.explosions = gameState.explosions
-        .map(updateExplosion)
-        .filter((explosion): explosion is Explosion => explosion.particles.length > 0);
+      // Update explosions (only if not paused and no modals open)
+      if (!isPausedRef.current && !anyModalOpen) {
+        gameState.explosions = gameState.explosions
+          .map(updateExplosion)
+          .filter((explosion): explosion is Explosion => explosion.particles.length > 0);
+      }
 
-      // Update missile popups: hover near player then fly to HUD slot and apply
+      // Update missile popups: hover near player then fly down-left to HUD slot
+      if (!isPausedRef.current && !anyModalOpen) {
       if (!gameState.missilePopups) gameState.missilePopups = [];
       const maxIcons = 5;
-      const iconX0 = CANVAS_WIDTH - 180;
-      const iconY = 120;
+      // Missile HUD is on bottom-left
+      const marginX = 20;
+      const energyBarY = CANVAS_HEIGHT - 40;
+      const iconsTopY = energyBarY - 44;
+      const iconX0 = marginX;
+      const iconY = iconsTopY;
       const gap = 26;
+      
       for (let i = gameState.missilePopups.length - 1; i >= 0; i--) {
         const p = gameState.missilePopups[i];
         const age = Date.now() - p.start;
+        
         if (p.phase === 'hover') {
           // small bobbing
           p.y = gameState.player.position.y - 20 + Math.sin(age * 0.01) * 4;
           p.x = gameState.player.position.x + Math.cos(age * 0.01) * 4;
-          if (age >= 800) { // shorter hover
+          if (age >= 600) {
             // Assign target slot if not already set
             if (typeof p.slotIndex !== 'number') {
               const ply: any = gameState.player as any;
               const haveSlots = Math.max(0, Math.min(maxIcons, (ply.missileSlots || 0)));
               p.slotIndex = haveSlots < maxIcons ? haveSlots : (maxIcons - 1);
-              p.targetX = iconX0 + (p.slotIndex as number) * gap;
-              p.targetY = iconY;
+              p.targetX = iconX0;
+              p.targetY = iconY - (p.slotIndex as number) * gap; // vertical stack
             }
             p.phase = 'fly';
+            (p as any).rotation = 0; // Start with no rotation
           }
-        } else {
-          // accelerate toward HUD target slot
-          const tx = (typeof p.targetX === 'number') ? p.targetX : (iconX0 + (maxIcons - 1) * gap);
+        } else if (p.phase === 'fly') {
+          // Fly down and to the left toward target (slower - takes twice as long)
+          const tx = (typeof p.targetX === 'number') ? p.targetX : iconX0;
           const ty = (typeof p.targetY === 'number') ? p.targetY : iconY;
           const dx = tx - p.x;
           const dy = ty - p.y;
           const dist = Math.hypot(dx, dy) || 1;
           const ux = dx / dist, uy = dy / dist;
-          const speed = Math.min(18, 5 + age * 0.012);
+          const speed = Math.min(10, 3 + age * 0.0075); // Halved for 2x duration
           p.x += ux * speed;
           p.y += uy * speed;
-          // shrink slightly during flight
-          p.scale = Math.max(0.6, 1.0 - (age / 1200));
-          if (dist < 10 && !p.applied) {
-            // Apply missiles and remove popup: add one slot (up to 5) and +5 segments
+          
+          // When getting close (within 140px), start landing phase for smoother docking
+          if (dist < 140) {
+            p.phase = 'landing' as any;
+            (p as any).landingStartTime = Date.now();
+          }
+        } else if ((p as any).phase === 'landing') {
+          // Landing animation: turn and approach final position with smooth easing
+          const tx = (typeof p.targetX === 'number') ? p.targetX : iconX0;
+          const ty = (typeof p.targetY === 'number') ? p.targetY : iconY;
+          const dx = tx - p.x;
+          const dy = ty - p.y;
+          const dist = Math.hypot(dx, dy) || 1;
+          const ux = dx / dist, uy = dy / dist;
+          
+          // Smooth easeOut deceleration for landing
+          const landingAge = Date.now() - ((p as any).landingStartTime || Date.now());
+          const progress = Math.min(1, landingAge / 1500); // 1.5s landing phase
+          // Cubic ease-out: fast->slow
+          const easeOut = 1 - Math.pow(1 - progress, 3);
+          const baseSpeed = 8;
+          const speed = Math.max(0.5, baseSpeed * (1 - easeOut));
+          p.x += ux * speed;
+          p.y += uy * speed;
+          
+          // Rotate as if banking to land (rotate up to 45 degrees)
+          (p as any).rotation = Math.min(Math.PI / 4, landingAge * 0.002);
+          
+          // Start shrinking with easing
+          p.scale = Math.max(0.2, 1.0 - (landingAge / 1200));
+          
+          // When very close and small, apply and vanish
+          if ((dist < 15 || landingAge > 1800) && !p.applied) {
+            // Apply missiles and remove popup
             const ply: any = gameState.player as any;
             if (typeof ply.missileSlots !== 'number') ply.missileSlots = Math.max(0, Math.min(5, gameState.player.missiles || 0));
             if (typeof ply.missileSegments !== 'number') ply.missileSegments = Math.max(0, Math.min(ply.missileSlots * 5, (gameState.player.missiles || 0) * 5));
@@ -4540,8 +3425,10 @@ ctx.strokeStyle = '#ffffff';
           }
         }
       }
+      }
 
-      // Apply gravitational forces between asteroids
+      // Apply gravitational forces between asteroids (only if not paused and no modals open)
+      if (!isPausedRef.current && !anyModalOpen) {
       for (let i = 0; i < gameState.asteroids.length; i++) {
         for (let j = i + 1; j < gameState.asteroids.length; j++) {
           const asteroid1 = gameState.asteroids[i];
@@ -4555,6 +3442,48 @@ ctx.strokeStyle = '#ffffff';
           asteroid2.velocity = subtractVectors(asteroid2.velocity, multiplyVector(force, 1 / asteroid2.mass));
         }
       }
+      // Cosmetic-only close-contact dust between asteroids (no physics changes)
+      try {
+        for (let i = 0; i < gameState.asteroids.length; i++) {
+          for (let j = i + 1; j < gameState.asteroids.length; j++) {
+            const a = gameState.asteroids[i];
+            const b = gameState.asteroids[j];
+            const dx = b.position.x - a.position.x;
+            const dy = b.position.y - a.position.y;
+            const d = Math.hypot(dx, dy) || 1;
+            if (d <= a.radius + b.radius) {
+              const cx = (a.position.x + b.position.x) / 2;
+              const cy = (a.position.y + b.position.y) / 2;
+              const isArtifactA = !!a.special;
+              const isArtifactB = !!b.special;
+              const isArtifact = isArtifactA || isArtifactB;
+              const target = isArtifactA ? a : (isArtifactB ? b : a);
+              const pal = chooseAsteroidDebrisPalette(target as any, isArtifact);
+              const dustBase = isArtifact ? (16 + Math.floor(Math.random() * 9)) : (8 + Math.floor(Math.random() * 7));
+              const chunkBase = isArtifact ? (6 + Math.floor(Math.random() * 5)) : (2 + Math.floor(Math.random() * 3));
+              // Half counts and travel for rub/contact
+              const dustN = Math.max(1, Math.round(dustBase * 0.5));
+              const chunkN = Math.max(1, Math.round(chunkBase * 0.5));
+              spawnImpactDebris({
+                gs: gameState,
+                at: { x: cx, y: cy },
+                baseVelocity: { x: 0, y: 0 },
+                countDust: dustN,
+                countChunks: chunkN,
+                lifeMul: (isArtifact ? 2.0 : 1.0) * 0.5,
+                speedMul: (isArtifact ? 1.15 : 1.0) * 0.5,
+                palette: pal,
+              });
+              if (isArtifact) {
+                const art = isArtifactA ? a : b;
+                const other = isArtifactA ? b : a;
+                const ang = Math.atan2(other.position.y - art.position.y, other.position.x - art.position.x);
+                markArtifactEdgeGlow(art as any, performance.now(), ang, 550);
+              }
+            }
+          }
+        }
+      } catch { /* cosmetic only */ }
 
       // Apply gravitational pull from large asteroids to ship
       gameState.asteroids.forEach(asteroid => {
@@ -4563,8 +3492,10 @@ ctx.strokeStyle = '#ffffff';
           gameState.player.velocity = addVectors(gameState.player.velocity, multiplyVector(force, 1 / gameState.player.mass));
         }
       });
+      }
 
-      // During warp, pull ship toward screen center; starts gentle and wins by the end
+      // During warp, pull ship toward screen center (only if not paused and no modals open)
+      if (!isPausedRef.current && !anyModalOpen) {
       if (gameState.levelComplete) {
         const cx = CANVAS_WIDTH / 2;
         const cy = CANVAS_HEIGHT / 2;
@@ -4580,6 +3511,7 @@ ctx.strokeStyle = '#ffffff';
         gameState.player.velocity = addVectors(gameState.player.velocity, { x: ux * strength, y: uy * strength });
         gameState.player.velocity = multiplyVector(gameState.player.velocity, 0.995);
       }
+      }
 
       // Collision detection: bullets vs asteroids
       for (let i = gameState.bullets.length - 1; i >= 0; i--) {
@@ -4593,6 +3525,55 @@ ctx.strokeStyle = '#ffffff';
             
             // Damage asteroid
             asteroid.health--;
+            // Set timestamp for fade animation (1 second fade in 5 stages)
+            (asteroid as any).lastHitTime = performance.now();
+            // Cosmetic: small explosion + debris on every hit (artifact spawns more, longer)
+            try {
+              const hitPos = { x: bullet.position.x, y: bullet.position.y };
+              const isArtifact = !!asteroid.special;
+              // Small explosion flash at impact (colored by asteroid health)
+              const fx = createExplosion(hitPos, env as any);
+              fx.particles = fx.particles.slice(0, 10);
+              
+              // Apply health color to explosion if asteroid is damaged
+              const healthColor = (asteroid as any).healthColor;
+              if (healthColor) {
+                fx.particles.forEach(p => {
+                  p.color = healthColor;
+                });
+              }
+              
+              gameState.explosions.push(fx);
+              // Debris spray
+              const pal = chooseAsteroidDebrisPalette(asteroid as any, isArtifact);
+              if (isArtifact) {
+                spawnImpactDebris({
+                  gs: gameState,
+                  at: hitPos,
+                  baseVelocity: bullet.velocity,
+                  // ~20% more than current artifact-on-hit settings
+                  countDust: Math.round((16 + Math.floor(Math.random() * 9)) * 1.2),
+                  countChunks: Math.round((6 + Math.floor(Math.random() * 5)) * 1.2),
+                  lifeMul: 2.0 * 1.2,
+                  speedMul: 1.2 * 1.2,
+                  palette: pal,
+                });
+                // Edge glow direction from asteroid center toward impact
+                const ang = Math.atan2(hitPos.y - asteroid.position.y, hitPos.x - asteroid.position.x);
+                markArtifactEdgeGlow(asteroid as any, performance.now(), ang, 600);
+              } else {
+                spawnImpactDebris({
+                  gs: gameState,
+                  at: hitPos,
+                  baseVelocity: bullet.velocity,
+                  countDust: 8 + Math.floor(Math.random() * 7), // 8-14
+                  countChunks: 2 + Math.floor(Math.random() * 4), // 2-5
+                  lifeMul: 1.0,
+                  speedMul: 1.0,
+                  palette: pal,
+                });
+              }
+            } catch { /* cosmetic only */ }
             // Distortion on hit: ONLY for special asteroid
             try {
               if (distortionRef.current && (asteroid as any).special) {
@@ -4607,7 +3588,7 @@ ctx.strokeStyle = '#ffffff';
             
             // Sparks when hitting special asteroid
             if (asteroid.special) {
-              const sparks = createExplosion(asteroid.position);
+              const sparks = createExplosion(asteroid.position, env as any);
               sparks.particles = sparks.particles.slice(0, 6).map(p => ({
                 ...p,
                 color: Math.random() > 0.5 ? '#ccccff' : '#ffff88',
@@ -4617,6 +3598,25 @@ ctx.strokeStyle = '#ffffff';
               gameState.explosions.push(sparks);
             }
             
+            // Subtle kinetic impulse from the bullet when asteroid survives the hit
+            try {
+              if (asteroid.health > 0) {
+                const bv = bullet.velocity;
+                const bmag = Math.hypot(bv.x, bv.y) || 1;
+                const dirx = bv.x / bmag, diry = bv.y / bmag;
+                // Size-based scaling: smaller rocks get nudged more
+                const base = asteroid.size === 'large' ? 0.12 : (asteroid.size === 'medium' ? 0.18 : 0.24);
+                const av = asteroid.velocity || { x: 0, y: 0 };
+                // Reduce impulse if already traveling along bullet direction
+                const rel = av.x * dirx + av.y * diry; // >0 means already moving along
+                const damp = rel > 0 ? 0.6 : 1.0;
+                const imp = base * damp;
+                asteroid.velocity = addVectors(av, { x: dirx * imp, y: diry * imp });
+                // Tiny drag to keep velocities sane
+                asteroid.velocity = multiplyVector(asteroid.velocity, 0.995);
+              }
+            } catch { /* cosmetic nudge only */ }
+
             // Play appropriate sound based on asteroid size
             if (asteroid.size === 'large') {
               if (asteroid.health <= 0) {
@@ -4643,11 +3643,26 @@ ctx.strokeStyle = '#ffffff';
                 }
               }
                 try {
-                  const panProvider = () => {
+                  const basePan = () => {
                     const nx = (asteroid.position.x / CANVAS_WIDTH) * 2 - 1;
                     return Math.max(-1, Math.min(1, nx));
                   };
-                  soundSystem.playLargeAsteroidDestroyPanned(panProvider);
+                  soundSystem.playLargeAsteroidDestroyPanned(basePan);
+                  // Artifact boom layering: three staggered small-explosion shots for bigger feel
+                  if (asteroid.special) {
+                    for (let i = 0; i < 3; i++) {
+                      const delay = Math.floor(Math.random() * 120); // 0..120ms
+                      const panDelta = (Math.random() - 0.5) * 0.4; // -0.2..+0.2
+                      window.setTimeout(() => {
+                        try {
+                          soundSystem.playSmallAsteroidDestroyPanned(() => {
+                            const p = basePan() + panDelta;
+                            return Math.max(-1, Math.min(1, p));
+                          });
+                        } catch { /* ignore */ }
+                      }, delay);
+                    }
+                  }
                 } catch { /* ignore */ }
               } else {
                 soundSystem.playLargeAsteroidCollision();
@@ -4676,6 +3691,11 @@ ctx.strokeStyle = '#ffffff';
             
             // Check if asteroid is destroyed
             if (asteroid.health <= 0) {
+              // Screen shake based on asteroid size
+              const shakeIntensity = getShakeIntensityForSize(asteroid.size);
+              const shakeDuration = asteroid.size === 'large' ? 300 : asteroid.size === 'medium' ? 200 : 100;
+              triggerScreenShake(screenShakeRef, screenShakeStartRef, shakeIntensity, shakeDuration);
+              
               // Split asteroid
               const fragments = splitAsteroid(asteroid, bullet.velocity).map(fragment => {
                 // Apply current stage speed to fragments
@@ -4697,8 +3717,39 @@ ctx.strokeStyle = '#ffffff';
               gameState.asteroids.splice(j, 1);
               gameState.asteroids.push(...fragments);
               
-              // Update score
-              const points = asteroid.size === 'large' ? 20 : asteroid.size === 'medium' ? 50 : 100;
+              // Update score with combo multiplier
+              const now = Date.now();
+              const timeSinceLastKill = now - lastKillTimeRef.current;
+              
+              // Check if combo should continue (within 3 seconds)
+              if (timeSinceLastKill <= comboTimeoutMs && comboCountRef.current > 0) {
+                comboCountRef.current++;
+              } else {
+                comboCountRef.current = 1; // Start new combo
+              }
+              
+              lastKillTimeRef.current = now;
+              
+              // Calculate multiplier: 1x, 2x, 3x, 5x, 10x
+              let mult = 1;
+              if (comboCountRef.current >= 20) mult = 10;
+              else if (comboCountRef.current >= 10) mult = 5;
+              else if (comboCountRef.current >= 5) mult = 3;
+              else if (comboCountRef.current >= 3) mult = 2;
+              
+              setComboMultiplier(mult);
+              
+              // Show combo display
+              if (mult > 1 || comboCountRef.current > 1) {
+                setComboDisplay({
+                  count: comboCountRef.current,
+                  multiplier: mult,
+                  showUntil: now + 2000 // Show for 2 seconds
+                });
+              }
+              
+              const basePoints = asteroid.size === 'large' ? 20 : asteroid.size === 'medium' ? 50 : 100;
+              const points = basePoints * mult;
               gameState.score += points;
               setScore(gameState.score);
             }
@@ -4720,8 +3771,50 @@ ctx.strokeStyle = '#ffffff';
             // Damage alien ship
             alienShip.health -= 1;
             if (alienShip.health <= 0) {
-              // Create explosion effect
-              gameState.explosions.push(createAlienExplosion(alienShip.position));
+              // Screen shake for UFO destruction
+              const isMissileType = (alienShip as any).isMissileType;
+              const shakeIntensity = isMissileType ? 15 : 10;
+              const shakeDuration = isMissileType ? 500 : 350;
+              triggerScreenShake(screenShakeRef, screenShakeStartRef, shakeIntensity, shakeDuration);
+              
+              // Create explosion effect (dramatic for Mother Ship variant)
+              const boom = isMissileType
+                ? createMotherShipExplosion(alienShip.position, env as any)
+                : createAlienExplosion(alienShip.position, env as any);
+              gameState.explosions.push(boom);
+              if ((alienShip as any).isMissileType) {
+                const ex = { x: alienShip.position.x, y: alienShip.position.y };
+                const suckR = 180;
+                const breakR = 36;
+                const toBreak: Asteroid[] = [];
+                for (const a of gameState.asteroids) {
+                  const dx = ex.x - a.position.x; const dy = ex.y - a.position.y;
+                  const d = Math.hypot(dx, dy) || 1;
+                  if (d < suckR) {
+                    const ux = dx / d, uy = dy / d;
+                    const s = (1 - d / suckR) * (a.size === 'large' ? 0.25 : a.size === 'medium' ? 0.35 : 0.45);
+                    a.velocity = addVectors(a.velocity, { x: ux * s, y: uy * s });
+                    if (d < breakR) toBreak.push(a);
+                  }
+                }
+                for (const a of toBreak) {
+                  const idx = gameState.asteroids.indexOf(a);
+                  if (idx >= 0) {
+                    const fragments = splitAsteroid(a).map(fragment => {
+                      if (gameState.stage === 1) fragment.velocity = multiplyVector(fragment.velocity, 0.6);
+                      else if (gameState.stage >= 3) fragment.velocity = multiplyVector(fragment.velocity, 1.2);
+                      return fragment;
+                    });
+                    spawnAsteroidDebris(a);
+                    if (a.size === 'large') spawnAsteroidDebris(a);
+                    gameState.asteroids.splice(idx, 1);
+                    gameState.asteroids.push(...fragments);
+                    const points = a.size === 'large' ? 20 : a.size === 'medium' ? 50 : 100;
+                    gameState.score += points;
+                    setScore(gameState.score);
+                  }
+                }
+              }
               // Play dramatic alien destruction sound (panned to alien x)
               try {
                 const panProvider = () => {
@@ -4730,9 +3823,37 @@ ctx.strokeStyle = '#ffffff';
                 };
                 soundSystem.playAlienDestroyPanned(panProvider);
               } catch { /* ignore */ }
-              // Remove ship and add score
+              // Remove ship and add score with combo
               gameState.alienShips.splice(j, 1);
-              gameState.score += 200; // Bonus points for destroying alien ship
+              
+              // Apply combo logic for UFO kills
+              const now = Date.now();
+              const timeSinceLastKill = now - lastKillTimeRef.current;
+              if (timeSinceLastKill <= comboTimeoutMs && comboCountRef.current > 0) {
+                comboCountRef.current++;
+              } else {
+                comboCountRef.current = 1;
+              }
+              lastKillTimeRef.current = now;
+              
+              let mult = 1;
+              if (comboCountRef.current >= 20) mult = 10;
+              else if (comboCountRef.current >= 10) mult = 5;
+              else if (comboCountRef.current >= 5) mult = 3;
+              else if (comboCountRef.current >= 3) mult = 2;
+              
+              setComboMultiplier(mult);
+              if (mult > 1 || comboCountRef.current > 1) {
+                setComboDisplay({
+                  count: comboCountRef.current,
+                  multiplier: mult,
+                  showUntil: now + 2000
+                });
+              }
+              
+              const basePoints = 200;
+              const points = basePoints * mult;
+              gameState.score += points;
               setScore(gameState.score);
             }
             break;
@@ -4740,8 +3861,9 @@ ctx.strokeStyle = '#ffffff';
         }
       }
 
-      // Collision detection: alien bullets vs player
-      if (!gameState.respawning && gameState.player.invulnerable === 0 && gameState.player.shieldTime === 0) {
+      // Collision detection: alien bullets vs player (disabled during forward dash)
+      const isForwardDashing = gameState.player.dashActive && gameState.player.dashType === 'forward';
+      if (!gameState.respawning && gameState.player.invulnerable === 0 && gameState.player.shieldTime === 0 && !isForwardDashing) {
         for (let i = gameState.alienBullets.length - 1; i >= 0; i--) {
           const bullet = gameState.alienBullets[i];
           
@@ -4758,29 +3880,17 @@ ctx.strokeStyle = '#ffffff';
             gameState.player.health -= Math.round(base * damageScale * shieldMult);
             gameState.player.invulnerable = 120; // 2 seconds at 60 FPS
             
-            // Larger explosion if missile: loud sound and white/red debris
+            // Larger explosion if missile. We are inside alienBullets context; always use lightweight Super UFO effect.
             if (bullet.explosionRadius) {
-              const boom = createExplosion(bullet.position);
-              boom.particles.forEach(p => { p.size *= 1.5; p.maxLife += 30; p.color = Math.random() < 0.5 ? '#ffffff' : '#ff3333'; });
-              // Add a huge amount of white/red debris
-              for (let i = 0; i < 160; i++) {
-                boom.particles.push({
-                  position: { x: bullet.position.x, y: bullet.position.y },
-                  velocity: { x: (Math.random() - 0.5) * 9, y: (Math.random() - 0.5) * 9 },
-                  life: 0,
-                  maxLife: 50 + Math.floor(Math.random() * 60),
-                  size: 2 + Math.random() * 3,
-                  color: Math.random() < 0.5 ? '#ffffff' : '#ff3333',
-                });
-              }
-              gameState.explosions.push(boom);
-              soundSystem.playMissileExplosion();
+              const boomLite = createUfoSuperExplosionLight(bullet.position, env as any);
+              gameState.explosions.push(boomLite);
+              // SFX is scheduled by the lightweight factory; do not double-play here.
             }
             
             // Check if player is dead
             if (gameState.player.health <= 0) {
-              // Schedule 10 asteroid-style explosions over 2s around ship
-              deathBurstsRef.current = { pos: { x: gameState.player.position.x, y: gameState.player.position.y }, remaining: 120, spawned: 0 };
+              // Temporarily disable multi-burst death effect to diagnose Super UFO stutter
+              // deathBurstsRef.current = { pos: { x: gameState.player.position.x, y: gameState.player.position.y }, remaining: 120, spawned: 0 };
               if (gameState.lives > 1) {
                 // Lose a life and respawn
                 gameState.lives -= 1;
@@ -4792,16 +3902,46 @@ ctx.strokeStyle = '#ffffff';
                 gameState.player.invulnerable = 180;
                 gameState.player.shieldTime = 180;
               } else {
-                // No lives left: game over
+                // No lives left: trigger auto-destruction first, then game over
+                gameOverPendingRef.current = true;
+                
+                // If no large asteroids remain, let auto-destruction handle game over
+                const largeAsteroids = gameState.asteroids.filter(a => a.size === 'large');
+                if (largeAsteroids.length === 0 && gameState.asteroids.length > 0) {
+                  // Auto-destruction will trigger and handle game over when complete
+                  return;
+                }
+                
+                // Otherwise, trigger game over immediately
                 gameState.gameRunning = false;
                 setGameRunning(false);
                 if (!gameOverStartRef.current) {
                   gameOverStartRef.current = performance.now();
+                  
+                  // Calculate rewards but delay scoreboard to show GAME OVER screen
+                  const calculateRewards = () => {
+                    // Get current game tickets earned (from randomizer wins)
+                    return getCurrentGameTickets();
+                  };
+                  
+                  const rewards = calculateRewards();
+                  setFinalScore(gameState.score);
+                  setFinalStage(gameState.stage);
+                  setRewardAmount(rewards);
+                  
+                  // Delay scoreboard by 3 seconds to show GAME OVER visuals and explosions
+                  setTimeout(() => {
+                    // Only show if still on game over screen (player didn't restart)
+                    if (gameStateRef.current && !gameStateRef.current.gameRunning) {
+                      setShowScoreboard(true);
+                    }
+                  }, 3000);
+                  
                   // Queue some quips
                   const quips = [
                     'Try again',
                     'Find Flipit Rewards',
-                    "Don’t give up!",
+                    "Don't give up!",
                     'You suck',
                     'Loser JK',
                     'Plot armor not included',
@@ -4816,7 +3956,7 @@ ctx.strokeStyle = '#ffffff';
                   ];
                   for (let i = 0; i < 3; i++) {
                     const pick = quips[Math.floor(Math.random() * quips.length)];
-                    queueQuip(pick, i * 1500);
+                    enqueueTitle({ listRef: titleOverlaysRef, nextIdRef: nextTitleIdRef }, pick, i * 1500);
                   }
                 }
               }
@@ -4835,18 +3975,19 @@ ctx.strokeStyle = '#ffffff';
             gameState.alienBullets.splice(i, 1);
             
             // Create small explosion effect at shield contact
-            const smallExplosion = createExplosion(bullet.position);
+            const smallExplosion = createExplosion(bullet.position, env as any);
             smallExplosion.particles = smallExplosion.particles.slice(0, 5); // Smaller explosion
             gameState.explosions.push(smallExplosion);
           }
         }
       }
 
-      // Collision detection: player vs asteroids (disabled during traction beam)
+      // Collision detection: player vs asteroids (disabled during traction beam and forward dash)
       const tractionState = tractionBeamRef.current;
       const tractionActive = tractionState.active && (tractionState.phase === 'approaching' || tractionState.phase === 'locking' || tractionState.phase === 'attached' || tractionState.phase === 'displaying');
+      const isForwardDashing2 = gameState.player.dashActive && gameState.player.dashType === 'forward';
       
-      if (gameState.player.invulnerable === 0 && gameState.player.shieldTime === 0 && !tractionActive) {
+      if (gameState.player.invulnerable === 0 && gameState.player.shieldTime === 0 && !tractionActive && !isForwardDashing2) {
         for (const asteroid of gameState.asteroids) {
           if (checkCollision(gameState.player, asteroid)) {
             // Do not bounce or damage when colliding with the special asteroid; let capture handle it
@@ -4887,6 +4028,27 @@ ctx.strokeStyle = '#ffffff';
               for (let k = 0; k < puffs; k++) {
                 gameState.explosions.push(createBlackPuffExplosion({ x: cx, y: cy }, base + boost));
               }
+              // Cosmetic debris at contact point
+              try {
+                const isArtifact = !!asteroid.special;
+                const pal = chooseAsteroidDebrisPalette(asteroid as any, isArtifact);
+                const dustN = isArtifact ? 16 + Math.floor(Math.random() * 9) : 8 + Math.floor(Math.random() * 7);
+                const chunkN = isArtifact ? 6 + Math.floor(Math.random() * 5) : 3 + Math.floor(Math.random() * 3);
+                spawnImpactDebris({
+                  gs: gameState,
+                  at: { x: cx, y: cy },
+                  baseVelocity: gameState.player.velocity,
+                  countDust: dustN,
+                  countChunks: chunkN,
+                  lifeMul: isArtifact ? 2.0 : 1.0,
+                  speedMul: isArtifact ? 1.2 : 1.0,
+                  palette: pal,
+                });
+                if (isArtifact) {
+                  const ang = Math.atan2(gameState.player.position.y - asteroid.position.y, gameState.player.position.x - asteroid.position.x);
+                  markArtifactEdgeGlow(asteroid as any, performance.now(), ang, 450);
+                }
+              } catch { /* cosmetic only */ }
             }
             // Calculate knockback based on asteroid properties
             const asteroidSpeed = vectorMagnitude(asteroid.velocity);
@@ -4943,6 +4105,17 @@ ctx.strokeStyle = '#ffffff';
                 gameState.player.invulnerable = 180;
                 gameState.player.shieldTime = 180;
               } else {
+                // No lives left: trigger auto-destruction first, then game over
+                gameOverPendingRef.current = true;
+                
+                // If no large asteroids remain, let auto-destruction handle game over
+                const largeAsteroids = gameState.asteroids.filter(a => a.size === 'large');
+                if (largeAsteroids.length === 0 && gameState.asteroids.length > 0) {
+                  // Auto-destruction will trigger and handle game over when complete
+                  return;
+                }
+                
+                // Otherwise, trigger game over immediately
                 gameState.gameRunning = false;
                 setGameRunning(false);
                 if (!gameOverStartRef.current) {
@@ -4965,7 +4138,7 @@ ctx.strokeStyle = '#ffffff';
                   ];
                   for (let i = 0; i < 3; i++) {
                     const pick = quips[Math.floor(Math.random() * quips.length)];
-                    queueQuip(pick, i * 1500);
+                    enqueueTitle({ listRef: titleOverlaysRef, nextIdRef: nextTitleIdRef }, pick, i * 1500);
                   }
                 }
               }
@@ -5007,9 +4180,185 @@ ctx.strokeStyle = '#ffffff';
             asteroid.velocity = addVectors(asteroid.velocity, bounceVelocity);
             
             // Create small explosion effect at shield contact
-            const smallExplosion = createExplosion(asteroid.position);
+            const smallExplosion = createExplosion(asteroid.position, env as any);
             smallExplosion.particles = smallExplosion.particles.slice(0, 8); // Smaller explosion
             gameState.explosions.push(smallExplosion);
+            // Cosmetic debris at shield contact
+            try {
+              const cx = (gameState.player.position.x + asteroid.position.x) / 2;
+              const cy = (gameState.player.position.y + asteroid.position.y) / 2;
+              const isArtifact = !!asteroid.special;
+              const pal = chooseAsteroidDebrisPalette(asteroid as any, isArtifact);
+              const dustBase = isArtifact ? (14 + Math.floor(Math.random() * 9)) : (6 + Math.floor(Math.random() * 7));
+              const chunkBase = isArtifact ? (5 + Math.floor(Math.random() * 4)) : (2 + Math.floor(Math.random() * 3));
+              // Half counts and travel for bump contact
+              const dustN = Math.max(1, Math.round(dustBase * 0.5));
+              const chunkN = Math.max(1, Math.round(chunkBase * 0.5));
+              spawnImpactDebris({
+                gs: gameState,
+                at: { x: cx, y: cy },
+                baseVelocity: asteroid.velocity,
+                countDust: dustN,
+                countChunks: chunkN,
+                lifeMul: (isArtifact ? 2.0 : 1.0) * 0.5,
+                speedMul: (isArtifact ? 1.2 : 1.0) * 0.5,
+                palette: pal,
+              });
+              if (isArtifact) {
+                const ang = Math.atan2(gameState.player.position.y - asteroid.position.y, gameState.player.position.x - asteroid.position.x);
+                markArtifactEdgeGlow(asteroid as any, performance.now(), ang, 450);
+              }
+            } catch { /* cosmetic only */ }
+          }
+        }
+      }
+      
+      // Auto-destruction sequence: trigger when no large asteroids remain
+      // Will auto-destroy all remaining small and medium asteroids
+      const largeAsteroids = gameState.asteroids.filter(a => a.size === 'large');
+      const noLargeRemain = largeAsteroids.length === 0;
+      
+      // Allow auto-destruction to start even during game over (when gameOverPending is true)
+      if (noLargeRemain && gameState.asteroids.length > 0 && !autoDestructionActiveRef.current && !gameState.levelComplete && (gameState.gameRunning || gameOverPendingRef.current) && !isPausedRef.current && !anyModalOpen) {
+        // Start auto-destruction sequence
+        autoDestructionActiveRef.current = true;
+        autoDestructionStartRef.current = Date.now();
+        autoDestructionInitialCountRef.current = gameState.asteroids.length;
+        // Generate random delay for first explosion (200-800ms)
+        autoDestructionNextDelayRef.current = 200 + Math.random() * 600;
+        
+        // Make UFOs flee toward screen edges
+        gameState.alienShips.forEach((ship: any) => {
+          ship._fleeing = true;
+          ship._fleeStartTime = Date.now();
+          // Calculate flee direction (away from center)
+          const centerX = CANVAS_WIDTH / 2;
+          const centerY = CANVAS_HEIGHT / 2;
+          const dx = ship.position.x - centerX;
+          const dy = ship.position.y - centerY;
+          const dist = Math.hypot(dx, dy) || 1;
+          ship._fleeDirection = { x: dx / dist, y: dy / dist };
+        });
+      }
+      
+      // Process auto-destruction sequence (allow it to continue even during game over)
+      if (autoDestructionActiveRef.current && !isPausedRef.current && !anyModalOpen) {
+        const elapsed = Date.now() - autoDestructionStartRef.current;
+        
+        // Update fleeing UFOs
+        gameState.alienShips.forEach((ship: any, index: number) => {
+          if (ship._fleeing) {
+            const fleeElapsed = Date.now() - ship._fleeStartTime;
+            const fleeSpeed = 3;
+            ship.velocity.x = ship._fleeDirection.x * fleeSpeed;
+            ship.velocity.y = ship._fleeDirection.y * fleeSpeed;
+            
+            // Explode UFO after 2 seconds of fleeing
+            if (fleeElapsed > 2000 && !ship._exploded) {
+              ship._exploded = true;
+              const boom = (ship as any).isMissileType
+                ? createMotherShipExplosion(ship.position, env as any)
+                : createAlienExplosion(ship.position, env as any);
+              gameState.explosions.push(boom);
+              // Remove ship
+              gameState.alienShips.splice(index, 1);
+            }
+          }
+        });
+        
+        // Check if it's time to destroy next asteroid (using random intervals)
+        if (gameState.asteroids.length > 0 && elapsed >= autoDestructionNextDelayRef.current) {
+          // Separate medium and small asteroids
+          const mediumAsteroids = gameState.asteroids.filter(a => a.size === 'medium');
+          
+          // First break all medium asteroids (they spawn small ones)
+          if (mediumAsteroids.length > 0) {
+            const toBreak = mediumAsteroids[0];
+            // Create explosion
+            gameState.explosions.push(createExplosion(toBreak.position, env as any));
+            // Play medium asteroid explosion sound
+            soundSystem.playMediumAsteroidDestroy();
+            // Split into small asteroids
+            const fragments = splitAsteroid(toBreak);
+            // Remove medium
+            const idx = gameState.asteroids.indexOf(toBreak);
+            if (idx >= 0) gameState.asteroids.splice(idx, 1);
+            // Add small fragments
+            gameState.asteroids.push(...fragments);
+          }
+          // Then destroy small asteroids one by one
+          else {
+            const currentSmalls = gameState.asteroids.filter(a => a.size === 'small');
+            if (currentSmalls.length > 0) {
+              const toDestroy = currentSmalls[0];
+              if (toDestroy) {
+                // Create explosion
+                gameState.explosions.push(createExplosion(toDestroy.position, env as any));
+                // Play small asteroid explosion sound
+                soundSystem.playSmallAsteroidDestroy();
+                // Remove asteroid
+                const idx = gameState.asteroids.indexOf(toDestroy);
+                if (idx >= 0) gameState.asteroids.splice(idx, 1);
+              }
+            }
+          }
+          
+          // Schedule next explosion with random delay (200-800ms)
+          autoDestructionStartRef.current = Date.now();
+          autoDestructionNextDelayRef.current = 200 + Math.random() * 600;
+        }
+        
+        // Reset sequence when all destroyed
+        if (gameState.asteroids.length === 0) {
+          autoDestructionActiveRef.current = false;
+          
+          // If game over was pending, trigger it now
+          if (gameOverPendingRef.current) {
+            gameOverPendingRef.current = false;
+            gameState.gameRunning = false;
+            setGameRunning(false);
+            if (!gameOverStartRef.current) {
+              gameOverStartRef.current = performance.now();
+              
+              // Calculate rewards but delay scoreboard to show GAME OVER screen
+              const calculateRewards = () => {
+                return getCurrentGameTickets();
+              };
+              
+              const rewards = calculateRewards();
+              setFinalScore(gameState.score);
+              setFinalStage(gameState.stage);
+              setRewardAmount(rewards);
+              
+              // Delay scoreboard by 3 seconds to show GAME OVER visuals and explosions
+              setTimeout(() => {
+                // Only show if still on game over screen (player didn't restart)
+                if (gameStateRef.current && !gameStateRef.current.gameRunning) {
+                  setShowScoreboard(true);
+                }
+              }, 3000);
+            }
+          }
+          
+          // Trigger score-based ticket randomizer after auto-destruction completes
+          if (!autoDestructionScoreRandomizerShownRef.current && gameState.score > 0) {
+            autoDestructionScoreRandomizerShownRef.current = true;
+            autoDestructionScoreRef.current = gameState.score;
+            
+            // Calculate chance based on score: 10,000 = 100%, below is proportional
+            const baseScore = Math.min(gameState.score, 10000);
+            const baseChance = (baseScore / 10000) * 100;
+            
+            // Check if we'll need to show bonus randomizer
+            if (gameState.score > 10000) {
+              autoDestructionBonusRandomizerPendingRef.current = true;
+            }
+            
+            // Show first randomizer (base chance) - increased delay to coordinate with GAME OVER screen
+            setTimeout(() => {
+              setRandomizerFlipitPercent(baseChance);
+              setShowTicketRandomizer(true);
+            }, 1500); // 1.5s delay to show during GAME OVER screen but before scoreboard
           }
         }
       }
@@ -5027,10 +4376,16 @@ ctx.strokeStyle = '#ffffff';
           
           // Play warp sound at the beginning of the effect
           soundSystem.playWarpSound();
+          
+          // Show ticket randomizer if artifact was scanned
+          if (gameState.currentArtifact && gameState.currentArtifact.type === 'Flipit') {
+            setRandomizerFlipitPercent(gameState.currentArtifact.finalChance);
+            setShowTicketRandomizer(true);
+          }
         }
         
-        // Animate warp effect
-        if (gameState.levelComplete) {
+        // Animate warp effect (pause if any modal is showing)
+        if (gameState.levelComplete && !anyModalOpen) {
           // Start slower then accelerate more aggressively: delta grows with current warpEffect
           const tWarp = Math.max(0, Math.min(1, gameState.warpEffect));
           const delta = 0.003 + 0.012 * tWarp * tWarp; // 0.003 at start -> 0.015 near end (quadratic acceleration)
@@ -5099,6 +4454,8 @@ ctx.strokeStyle = '#ffffff';
             gameState.alienShips = []; // Clear existing alien ships
             gameState.alienBullets = []; // Clear alien bullets
             gameState.explosions = []; // Clear explosions
+            // Reset artifact info for new level
+            gameState.currentArtifact = undefined;
             // NOTE: Do NOT clear bonuses — persist any on-screen bonuses across warp
             // Also, do not forcibly stop bonus ambient sound here; let it manage its own lifecycle
             
@@ -5111,7 +4468,13 @@ ctx.strokeStyle = '#ffffff';
             }
 
             // Re-tune star density for current canvas size
-            ensureStarsForCanvas();
+            ensureStarsForCanvas({
+              starsRef,
+              initialAreaRef,
+              initialStarCountRef,
+              CANVAS_WIDTH,
+              CANVAS_HEIGHT,
+            });
 
             // Reposition refuel station for the new stage (far off-screen tiles)
             {
@@ -5168,43 +4531,128 @@ ctx.strokeStyle = '#ffffff';
       }
     }
 
+      // Update screen shake
+      const shakeOffset = updateScreenShake(screenShakeRef, screenShakeStartRef);
+      
+      // CRITICAL: Reset canvas transform to identity at the start of each frame
+      // This prevents transform accumulation if previous frame's ctx.restore() failed due to errors
+      // Without this, screen shake and other transforms progressively shift the draw area
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      
+      // Apply screen shake translation to canvas
+      // Note: We don't clear during shake to avoid dark flash
+      // Minor edge artifacts during shake are acceptable (barely visible, only ~200-300ms)
+      ctx.save();
+      ctx.translate(shakeOffset.x, shakeOffset.y);
+
       // 1) Background → returns bgMap
       const bgMap = drawBackground(ctx, gameState, env);
       // 2) Stars (uses bgMap)
       drawStars(ctx, gameState, env, bgMap);
-      // 3) Entities: showShipOnTop branch
+      // 3) Objectives (stations) under the player so ship appears on top
+      try { drawObjectives(ctx, gameState, env); } catch {}
+      // 4) Entities: showShipOnTop branch
       {
         const tBeam = tractionBeamRef.current as any;
         const showShipOnTop = !!(tBeam && (tBeam.active || (tBeam.onTopEntry && tBeam.onTopEntry.inProgress)));
         if (showShipOnTop) {
-          drawAsteroidsMod(ctx, gameState, env);
-          drawPlayerMod(ctx, gameState, env);
+          // Special below ship, normals above
+          drawSpecialAsteroidsMod(ctx, gameState, env);
+          withPlayerDockingXform(ctx, gameState, env, () => { drawPlayerMod(ctx, gameState, env); });
+          try { drawShield(ctx, gameState, env); } catch {}
+          drawNormalAsteroidsMod(ctx, gameState, env);
+          // Grid last for visibility
+          try { drawAsteroidScanGrid(ctx, gameState, env); } catch {}
         } else {
-          drawPlayerMod(ctx, gameState, env);
-          drawAsteroidsMod(ctx, gameState, env);
+          // Even when not showing ship on top, keep same depth plan for docking visuals
+          drawSpecialAsteroidsMod(ctx, gameState, env);
+          withPlayerDockingXform(ctx, gameState, env, () => { drawPlayerMod(ctx, gameState, env); });
+          drawNormalAsteroidsMod(ctx, gameState, env);
+          try { drawShield(ctx, gameState, env); } catch {}
+          // Grid last
+          try { drawAsteroidScanGrid(ctx, gameState, env); } catch {}
         }
       }
-      // 4) Player bullets
+      // 5) Player bullets
       drawBulletsMod(ctx, gameState, env);
-      // 5) Aliens
+      // 6) Aliens
       drawAliensMod(ctx, gameState, env);
-      // 6) Bonuses
+      // 7) Bonuses
       drawBonusesMod(ctx, gameState, env);
       // Also render alien bullets and player missiles before effects (kept from prior wiring)
       drawAlienBulletsMod(ctx, gameState, env);
       if (gameState.playerMissiles && gameState.playerMissiles.length > 0) {
         drawPlayerMissilesMod(ctx, gameState, env);
       }
-      // 7) Explosions
+      // 8) Explosions
       drawExplosionsMod(ctx, gameState, env);
-      // 8) Debris
+      // 9) Debris
       drawDebrisMod(ctx, gameState, env);
-      // 9) UI overlays
+      // 10) UI overlays
       drawTractorOverlay(ctx, gameState, env);
-      // 10) HUD
+      // 11) HUD
       drawHUD(ctx, gameState, env);
       // (Optional no-op placeholder that was there before)
       drawFrame(ctx, gameState, frameNow, env);
+
+      // Draw combo display if active
+      if (comboDisplay && Date.now() < comboDisplay.showUntil) {
+        ctx.save();
+        const centerX = CANVAS_WIDTH / 2;
+        const centerY = CANVAS_HEIGHT / 3;
+        
+        // Fade out in last 500ms
+        const remaining = comboDisplay.showUntil - Date.now();
+        const alpha = remaining < 500 ? remaining / 500 : 1;
+        
+        ctx.globalAlpha = alpha;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        // Combo count
+        ctx.font = 'bold 48px Arial';
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 4;
+        ctx.strokeText(`${comboDisplay.count} HITS`, centerX, centerY);
+        ctx.fillStyle = '#ffaa00';
+        ctx.fillText(`${comboDisplay.count} HITS`, centerX, centerY);
+        
+        // Multiplier
+        if (comboDisplay.multiplier > 1) {
+          ctx.font = 'bold 72px Arial';
+          const multText = `${comboDisplay.multiplier}X`;
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 6;
+          ctx.strokeText(multText, centerX, centerY + 60);
+          
+          // Color based on multiplier
+          let color = '#ffaa00';
+          if (comboDisplay.multiplier >= 10) color = '#ff00ff';
+          else if (comboDisplay.multiplier >= 5) color = '#ff0000';
+          else if (comboDisplay.multiplier >= 3) color = '#ffaa00';
+          else color = '#ffffff';
+          
+          ctx.fillStyle = color;
+          ctx.fillText(multText, centerX, centerY + 60);
+        }
+        
+        ctx.restore();
+      }
+
+      // Restore canvas state (remove screen shake translation)
+      ctx.restore();
+      
+      // Subtle edge darkening during shake to minimize artifacts (1px borders)
+      if (shakeOffset.x !== 0 || shakeOffset.y !== 0) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+        const borderWidth = 1;
+        // Top and bottom edges
+        ctx.fillRect(0, 0, CANVAS_WIDTH, borderWidth);
+        ctx.fillRect(0, CANVAS_HEIGHT - borderWidth, CANVAS_WIDTH, borderWidth);
+        // Left and right edges  
+        ctx.fillRect(0, 0, borderWidth, CANVAS_HEIGHT);
+        ctx.fillRect(CANVAS_WIDTH - borderWidth, 0, borderWidth, CANVAS_HEIGHT);
+      }
 
       // Detect HUD-relevant changes and set highlight timers
       const nowHud = performance.now();
@@ -5241,22 +4689,122 @@ ctx.strokeStyle = '#ffffff';
       // UI layers: overlays then HUD (order preserved)
       drawTractorOverlay(ctx, gameState, env);
       drawHUD(ctx, gameState, env);
-
-      // Show current background name on screen (bottom-left)
-      try {
-        if (backdrops.length > 0) {
-          const url = backdrops[backdropIndex] || '';
-          const parts = url.split('/');
-          const fname = parts[parts.length - 1] || url;
+      // Minimap (UI-only), after HUD
+      try { drawMiniMap(ctx, gameState, env); } catch {}
+      
+      // Auto-destruction visual effects: screen fade + text overlay
+      if (autoDestructionActiveRef.current) {
+        // 10% screen fade (darken)
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        
+        // Check if user has a chance to win (has Flipit artifact)
+        const hasChanceToWin = gameState.currentArtifact?.type === 'Flipit';
+        const centerX = CANVAS_WIDTH / 2;
+        const centerY = CANVAS_HEIGHT / 2;
+        
+        // Large main text at 10% opacity
+        ctx.font = 'bold 180px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+        ctx.lineWidth = 3;
+        
+        const mainText = hasChanceToWin ? 'AWESOME' : 'TOO BAD';
+        ctx.strokeText(mainText, centerX, centerY);
+        ctx.fillText(mainText, centerX, centerY);
+        
+        // Smaller subtitle text below
+        ctx.font = 'bold 36px Arial';
+        const subText = hasChanceToWin 
+          ? 'You have a chance to win' 
+          : 'You lost your chance this time';
+        ctx.strokeText(subText, centerX, centerY + 120);
+        ctx.fillText(subText, centerX, centerY + 120);
+        
+        ctx.restore();
+      }
+      
+      // Game Over visual effects: screen fade + "GAME OVER" text
+      if (!gameState.gameRunning && gameOverStartRef.current) {
+        // 10% screen fade (darken)
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        
+        const centerX = CANVAS_WIDTH / 2;
+        const centerY = CANVAS_HEIGHT / 2;
+        
+        // Large "GAME OVER" text at 10% opacity
+        ctx.font = 'bold 180px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+        ctx.lineWidth = 3;
+        ctx.strokeText('GAME OVER', centerX, centerY);
+        ctx.fillText('GAME OVER', centerX, centerY);
+        
+        // Smaller subtitle text below
+        ctx.font = 'bold 36px Arial';
+        ctx.strokeText("That was fun, let's do it again", centerX, centerY + 120);
+        ctx.fillText("That was fun, let's do it again", centerX, centerY + 120);
+        
+        // Pulsing "Press R to Restart" prompt
+        const pulseAlpha = 0.25 + Math.sin(frameNow / 400) * 0.15; // Smooth pulse between 0.1 and 0.4
+        ctx.font = 'bold 48px Arial';
+        ctx.fillStyle = `rgba(100, 200, 255, ${pulseAlpha})`;
+        ctx.strokeStyle = `rgba(50, 100, 150, ${pulseAlpha * 0.5})`;
+        ctx.lineWidth = 2;
+        ctx.strokeText('Press R to Restart', centerX, centerY + 220);
+        ctx.fillText('Press R to Restart', centerX, centerY + 220);
+        
+        ctx.restore();
+      }
+      
+      // Draw LOST sequence countdown in center of screen
+      const traction = tractionBeamRef.current;
+      const lostSeq = (traction as any).lostSequence;
+      if (lostSeq && lostSeq.active) {
+        const nowPerf = performance.now();
+        const elapsed = nowPerf - lostSeq.startTime;
+        const duration = 3000; // 3 seconds
+        
+        if (elapsed < duration) {
+          // Calculate current percentage (counts down from initial to 0)
+          const progress = elapsed / duration;
+          const currentPercent = lostSeq.initialPercent * (1 - progress);
+          
+          // Center screen position
+          const cx = CANVAS_WIDTH / 2;
+          const cy = CANVAS_HEIGHT / 2;
+          
+          // Draw large red percentage countdown
           ctx.save();
-          ctx.globalAlpha = 0.85;
-          ctx.fillStyle = '#ffffff';
-          ctx.font = '12px Arial';
-          ctx.textAlign = 'left';
-          ctx.fillText(`Background: ${fname}`, 12, CANVAS_HEIGHT - 12);
+          ctx.font = 'bold 72px Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = `rgba(255, 0, 0, ${1 - progress * 0.3})`; // Fade slightly
+          ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+          ctx.lineWidth = 4;
+          ctx.strokeText(`${currentPercent.toFixed(1)}%`, cx, cy);
+          ctx.fillText(`${currentPercent.toFixed(1)}%`, cx, cy);
+          
+          // Draw "LOST" text below
+          ctx.font = 'bold 32px Arial';
+          ctx.fillStyle = `rgba(255, 100, 100, ${1 - progress * 0.3})`;
+          ctx.strokeText('LOST', cx, cy + 60);
+          ctx.fillText('LOST', cx, cy + 60);
           ctx.restore();
+        } else {
+          // Countdown finished, clear the sequence and end traction
+          (traction as any).lostSequence = { active: false };
+          traction.active = false;
+          traction.targetAsteroid = null;
         }
-      } catch { /* ignore */ }
+      }
 
       // Draw song title overlays (bottom-left third) with perspective fade/scale
       const now = performance.now();
@@ -5370,11 +4918,6 @@ ctx.strokeStyle = '#ffffff';
         }
       }
 
-      // Handle restart
-      if (!gameState.gameRunning && gameState.keys['r']) {
-        initGame();
-      }
-
       // Dev: add a lightweight summary roughly every 30 seconds (60fps * 30s = DEV_SUMMARY_FRAMES)
       if (__DEV_MODE__) {
         __frameCounter++;
@@ -5385,7 +4928,7 @@ ctx.strokeStyle = '#ffffff';
           const summary = `f=${__frameCounter} ast=${gs?.asteroids?.length ?? 0} bul=${gs?.bullets?.length ?? 0} deb=${gs?.visualDebris?.length ?? 0} exp=${gs?.explosions?.length ?? 0} phase=${tractorPhase} bg=${gs?.bgBrightness ?? DEFAULT_BG_BRIGHTNESS}`;
           // eslint-disable-next-line no-console
           console.log('[summary]', summary);
-          const arr = debugLinesRef.current; arr.push(summary); if (arr.length > DEBUG_PANEL_MAX) arr.splice(0, arr.length - DEBUG_PANEL_MAX);
+          const arr = debugLinesRef.current; arr.push(summary); if (arr.length > 200) arr.splice(0, arr.length - 200);
         }
       }
 
@@ -5400,8 +4943,7 @@ ctx.strokeStyle = '#ffffff';
         const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
         const arr = debugLinesRef.current; arr.push(`[error] ${msg}`);
         if (arr.length > 200) arr.splice(0, arr.length - 200);
-        // eslint-disable-next-line no-console
-        console.error('[frame-error]', err);
+        devFrameError(err);
         // Re-throw to avoid masking in dev if needed:
         // throw err;
       }
@@ -5478,22 +5020,64 @@ ctx.strokeStyle = '#ffffff';
   // Handle window resize when in Fit-to-Window mode (no fullscreen)
   useEffect(() => {
     const onResize = () => {
-      if (isFitted) applyFitSizing();
+      if (isFittedRef.current) {
+        const cfg = getFxConfig({ refs: { fxConfig: devFxRefs.current.fxConfig } });
+        applyFitSizing({
+          initialCanvasRef,
+          ensureStarsForCanvas: () => ensureStarsForCanvas({
+            starsRef,
+            initialAreaRef,
+            initialStarCountRef,
+            CANVAS_WIDTH,
+            CANVAS_HEIGHT,
+            starCountScale: cfg.starCountScale,
+          }),
+          setCanvasSize,
+          setCanvasPixelSize,
+          setIsFitted,
+          renderScale: cfg.renderScale,
+        });
+      }
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [isFitted, applyFitSizing]);
-
-  // Re-apply sizing whenever fit mode toggles on
-  useEffect(() => {
-    if (isFitted) {
-      applyFitSizing();
-    }
-  }, [isFitted, applyFitSizing]);
+  }, []);
 
   // Removed Fullscreen support
 
   // (Removed duplicate setOnMusicTrackChange effect; handled earlier)
+
+  // Mount-only: restore saved FX preset (if any) and apply sizing; then restore FPS cap
+  useEffect(() => {
+    const saved = loadFxPreset();
+    if (saved) {
+      if (!devFxRefs.current.fxConfig) devFxRefs.current.fxConfig = {};
+      applyFxPreset(devFxRefs.current, saved);
+      const cfg = getFxConfig({ refs: { fxConfig: devFxRefs.current.fxConfig } });
+      const ensureStarsForCanvasCb = () => ensureStarsForCanvas({
+        starsRef,
+        initialAreaRef,
+        initialStarCountRef,
+        CANVAS_WIDTH,
+        CANVAS_HEIGHT,
+        starCountScale: cfg.starCountScale,
+      });
+      applyFitSizing({
+        initialCanvasRef,
+        ensureStarsForCanvas: ensureStarsForCanvasCb,
+        setCanvasSize,
+        setCanvasPixelSize,
+        setIsFitted,
+        renderScale: cfg.renderScale,
+      });
+    }
+    // Restore FPS cap regardless of whether a preset was saved
+    const cap = loadFxCap();
+    if (cap != null) {
+      if (!devFxRefs.current.fxConfig) devFxRefs.current.fxConfig = {};
+      devFxRefs.current.fxConfig.capFps = cap;
+    }
+  }, []);
 
   const handlePlayPauseMusic = () => {
     const state = soundSystem.getMusicState();
@@ -5540,35 +5124,13 @@ ctx.strokeStyle = '#ffffff';
     safePlayMusic();
   };
 
-  const handleMusicVolume = (v: number) => {
-    setMusicVol(v);
-    soundSystem.setMusicVolume(v);
-  };
-
-  const handleSfxVolume = (v: number) => {
-    setPreferredSfxVol(v);
-    setSfxVol(v);
-    soundSystem.setSfxVolumeFromUser(v);
-    // User changed SFX manually; cancel any pause override behavior
-    if (sfxPausedOverride) setSfxPausedOverride(false);
-  };
-
-  const toggleMute = () => {
-    const newMutedState = !isMuted;
-    setIsMuted(newMutedState);
-    soundSystem.setMuted(newMutedState);
-    // When muting, also stop any currently playing sounds
-    if (newMutedState) {
-      soundSystem.stopAllSounds();
-      setMusicPlaying(false);
-    }
-  };
+  // controls already created earlier
 
   // Disable legacy canvas 'Now Playing' overlay when MusicDock is present
   const ENABLE_CANVAS_NOW_PLAYING_OVERLAY = false;
 
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4 relative">
+    <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center p-4 relative" style={{ cursor: 'default' }}>
       {/* Floating animated title banner (DOM overlay) */}
       <TitleBanner
         title="Play & Win Flipit Rewards"
@@ -5587,24 +5149,117 @@ ctx.strokeStyle = '#ffffff';
       {/* Info popup modal */}
       <InfoPopup open={infoOpen} onClose={() => setInfoOpen(false)} />
 
-      {/* In-app Debug Panel (dev-only) */}
-      {__DEV_MODE__ && (
-        <DebugPanel lines={debugLinesRef.current} visible={true} max={200} />
-      )}
+      {/* Removed legacy floating DebugPanel overlay. All debug UI lives inside the panel below. */}
 
-      {/* Debug Panel Toggle Button - Only show in development */}
-      {import.meta.env.DEV && (
+      {/* Top buttons row: Login/User on left, Effects/Debug on right */}
+      <div className="mb-2 px-4 flex justify-between items-center" style={{ width: canvasSize.w + 32 }}>
+        {/* Left side: Login/User and Scoreboard */}
+        <div className="flex flex-row gap-1.5">
+        {/* Login/User Button */}
+        {currentUser ? (
+          <div className="flex items-center gap-1.5">
+            <div className="px-2 py-1 bg-cyan-900/70 backdrop-blur-sm border border-cyan-400/40 rounded text-xs">
+              <span className="text-cyan-300">👤</span>
+              <span className="text-white ml-1">{currentUser.displayName}</span>
+            </div>
+            <button
+              onClick={() => {
+                if (confirm('Are you sure you want to logout?')) {
+                  localStorage.removeItem('asteroids_user');
+                  setCurrentUser(null);
+                }
+              }}
+              className="px-2 py-1 bg-gray-700/80 hover:bg-gray-600 text-white text-xs rounded border border-gray-500/40 transition-colors"
+              title="Logout"
+            >
+              Logout
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowLoginModal(true)}
+            className="px-2 py-1 bg-cyan-700/80 hover:bg-cyan-600 text-white text-xs rounded border border-cyan-400/40 transition-colors"
+          >
+            Login / Register
+          </button>
+        )}
+        
+        {/* Scoreboard Link */}
         <button
-          onClick={() => setDebugPanelOpen(!debugPanelOpen)}
-          className="fixed left-4 top-1/2 transform -translate-y-1/2 px-3 py-1.5 text-xs rounded bg-cyan-700 hover:bg-cyan-600 text-white border border-cyan-400 shadow z-10"
+          onClick={() => {
+            try {
+              const displayName = currentUser?.displayName ?? 'Anonymous';
+              const userEmail = currentUser?.email;
+              const saved = saveScore({
+                displayName,
+                score: gameState.score ?? 0,
+                stage: gameState.stage ?? 1,
+                rewardAmount: 0,
+                userEmail,
+              });
+              setTargetScoreIdLeaderboard(saved.id);
+            } catch {}
+            setShowLeaderboard(true);
+          }}
+          className="px-2 py-1 bg-yellow-700/80 hover:bg-yellow-600 text-white text-xs rounded border border-yellow-400/40 transition-colors flex items-center gap-1"
         >
-          {debugPanelOpen ? 'Debug ▾' : 'Debug ▸'}
+          <span>🏆</span>
+          <span>Leaderboard</span>
         </button>
-      )}
+        </div>
+        
+        {/* Right side: Effects/CPU and Debug Tools */}
+        <div className="flex gap-1.5">
+          {/* Background/Effects dropdown button */}
+          <BackgroundDropdown
+            open={bgToolsOpen}
+            onToggle={() => setBgToolsOpen((o) => !o)}
+            onNextBackground={() => {
+              if (backdrops.length === 0) return;
+              const next = (backdropIndex + 1) % backdrops.length;
+              setBackdropIndex(next);
+              const img = new Image();
+              img.src = backdrops[next];
+              img.onload = () => { bgImageRef.current = img; };
+              img.onerror = () => { bgImageRef.current = null; };
+            }}
+            bgOpacity={bgOpacity}
+            bgBrightness={bgBrightness}
+            setBgOpacity={setBgOpacity}
+            setBgBrightness={setBgBrightness}
+            effectsApply={effectsApply}
+            setEffectsApply={setEffectsApply}
+            trailsEnabled={trailsEnabled}
+            setTrailsEnabled={setTrailsEnabled}
+            trailsTargets={trailsTargets}
+            setTrailsTargets={setTrailsTargets}
+          />
+          
+          {/* Debug Tools button (dev only) */}
+          {import.meta.env.DEV && !debugPanelOpen && (
+            <button
+              onClick={() => setDebugPanelOpen(true)}
+              className="px-3 py-1.5 text-xs rounded bg-cyan-700 hover:bg-cyan-600 text-white border border-cyan-400 shadow opacity-20 hover:opacity-100 transition-opacity"
+              aria-label="Open Debug Panel"
+            >
+              Debug Tools
+            </button>
+          )}
+        </div>
+      </div>
 
-      {/* Debug Panel - Only show in development when open */}
+      {/* Debug Panel Launcher moved to top button row */}
+
+      {/* Debug Panel - Only show in development when open (aligned with right buttons) */}
       {import.meta.env.DEV && debugPanelOpen && (
-        <div className="fixed left-4 top-1/2 transform -translate-y-1/2 translate-y-8 bg-gray-900/95 backdrop-blur-sm text-white p-4 rounded-lg border border-gray-700 shadow-lg z-10 w-80">
+        <div className="fixed right-4 top-16 bg-gray-900/95 backdrop-blur-sm text-white p-4 rounded-lg border border-gray-700 shadow-lg z-50 w-80 max-h-[80vh] overflow-y-auto">
+          <button
+            onClick={() => setDebugPanelOpen(false)}
+            aria-label="Close Debug Tools"
+            className="absolute right-2 top-2 px-2 py-0.5 text-xs rounded bg-gray-700 hover:bg-gray-600 border border-gray-500"
+          >
+            ×
+          </button>
           {/* Action Notes Box */}
           <div className="mb-4">
             <h3 className="text-sm font-semibold text-cyan-400 mb-2">Action Notes</h3>
@@ -5617,22 +5272,154 @@ ctx.strokeStyle = '#ffffff';
                 ))}
               </div>
             </div>
+            {/* FX Presets (DEV-only) */}
+            <div className="mt-3">
+              <h4 className="text-xs font-semibold text-cyan-300 mb-1">FX Presets</h4>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  onClick={() => {
+                    if (!devFxRefs.current.fxConfig) devFxRefs.current.fxConfig = {};
+                    applyFxPreset(devFxRefs.current, 'high');
+                    saveFxPreset('high');
+                    const cfg = getFxConfig({ refs: { fxConfig: devFxRefs.current.fxConfig } });
+                    const ensureStarsForCanvasCb = () => ensureStarsForCanvas({
+                      starsRef,
+                      initialAreaRef,
+                      initialStarCountRef,
+                      CANVAS_WIDTH,
+                      CANVAS_HEIGHT,
+                      starCountScale: cfg.starCountScale,
+                    });
+                    applyFitSizing({
+                      initialCanvasRef,
+                      ensureStarsForCanvas: ensureStarsForCanvasCb,
+                      setCanvasSize,
+                      setCanvasPixelSize,
+                      setIsFitted,
+                      renderScale: cfg.renderScale,
+                    });
+                  }}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded border border-gray-500"
+                >FX High</button>
+                <button
+                  onClick={() => {
+                    if (!devFxRefs.current.fxConfig) devFxRefs.current.fxConfig = {};
+                    applyFxPreset(devFxRefs.current, 'medium');
+                    saveFxPreset('medium');
+                    const cfg = getFxConfig({ refs: { fxConfig: devFxRefs.current.fxConfig } });
+                    const ensureStarsForCanvasCb = () => ensureStarsForCanvas({
+                      starsRef,
+                      initialAreaRef,
+                      initialStarCountRef,
+                      CANVAS_WIDTH,
+                      CANVAS_HEIGHT,
+                      starCountScale: cfg.starCountScale,
+                    });
+                    applyFitSizing({
+                      initialCanvasRef,
+                      ensureStarsForCanvas: ensureStarsForCanvasCb,
+                      setCanvasSize,
+                      setCanvasPixelSize,
+                      setIsFitted,
+                      renderScale: cfg.renderScale,
+                    });
+                  }}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded border border-gray-500"
+                >FX Med</button>
+                <button
+                  onClick={() => {
+                    if (!devFxRefs.current.fxConfig) devFxRefs.current.fxConfig = {};
+                    applyFxPreset(devFxRefs.current, 'low');
+                    saveFxPreset('low');
+                    const cfg = getFxConfig({ refs: { fxConfig: devFxRefs.current.fxConfig } });
+                    const ensureStarsForCanvasCb = () => ensureStarsForCanvas({
+                      starsRef,
+                      initialAreaRef,
+                      initialStarCountRef,
+                      CANVAS_WIDTH,
+                      CANVAS_HEIGHT,
+                      starCountScale: cfg.starCountScale,
+                    });
+                    applyFitSizing({
+                      initialCanvasRef,
+                      ensureStarsForCanvas: ensureStarsForCanvasCb,
+                      setCanvasSize,
+                      setCanvasPixelSize,
+                      setIsFitted,
+                      renderScale: cfg.renderScale,
+                    });
+                  }}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded border border-gray-500"
+                >FX Low</button>
+              </div>
+              <div className="mt-2">
+                <button
+                  onClick={() => {
+                    // Clear saved preset and cap
+                    clearFxPreset();
+                    clearFxCap();
+                    // Reset runtime FX config to defaults
+                    devFxRefs.current.fxConfig = { ...FX_DEFAULTS };
+                    // Re-ensure stars and re-apply fit sizing with defaults
+                    const cfg = getFxConfig({ refs: { fxConfig: devFxRefs.current.fxConfig } });
+                    const ensureStarsForCanvasCb = () => ensureStarsForCanvas({
+                      starsRef,
+                      initialAreaRef,
+                      initialStarCountRef,
+                      CANVAS_WIDTH,
+                      CANVAS_HEIGHT,
+                      starCountScale: cfg.starCountScale,
+                    });
+                    applyFitSizing({
+                      initialCanvasRef,
+                      ensureStarsForCanvas: ensureStarsForCanvasCb,
+                      setCanvasSize,
+                      setCanvasPixelSize,
+                      setIsFitted,
+                      renderScale: cfg.renderScale,
+                    });
+                  }}
+                  className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded border border-gray-500"
+                >Reset FX</button>
+              </div>
+            </div>
+            {/* Debug Console */}
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1">
+                <h4 className="text-xs font-semibold text-cyan-300">Debug Console</h4>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setDevMax(v => !v)}
+                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded border border-gray-500"
+                  >{devMax ? 'Minimize' : 'Maximize'}</button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(devLines.join('\n'));
+                      } catch (e) {
+                        // eslint-disable-next-line no-console
+                        console.log('[dev-copy]', devLines);
+                      }
+                    }}
+                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded border border-gray-500"
+                  >Copy</button>
+                </div>
+              </div>
+              <div
+                className="bg-gray-800/80 rounded p-2 border border-gray-600 font-mono text-[11px] leading-4 overflow-y-auto"
+                style={{ maxHeight: devMax ? 260 : 96 }}
+              >
+                {devLines.slice(-250).map((ln, i) => (
+                  <div key={i} className="text-gray-300">{ln}</div>
+                ))}
+              </div>
+            </div>
           </div>
 
           {/* Development Tools */}
           <div>
             <h3 className="text-sm font-semibold text-cyan-400 mb-2">Development Tools</h3>
             <div className="space-y-2">
-            <button
-              onClick={() => {
-                if (!gameStateRef.current) return;
-                // TODO: Trigger cinematic analyzer when implemented
-                setActionNotes(prev => [...prev, "Manual cinematic trigger test (not implemented yet)"]);
-              }}
-              className="w-full px-2 py-1 bg-purple-600 hover:bg-purple-700 text-white text-xs rounded"
-            >
-              Test Cinematic Analyzer
-            </button>
             <button
               onClick={() => {
                 if (!gameStateRef.current) return;
@@ -5659,26 +5446,84 @@ ctx.strokeStyle = '#ffffff';
             </button>
             <button
               onClick={() => {
-                if (!gameStateRef.current) return;
-                const gs = gameStateRef.current;
-                // Clear all asteroids except special ones
-                const beforeCount = gs.asteroids.length;
-                gs.asteroids = gs.asteroids.filter(a => a.special === true);
-                const afterCount = gs.asteroids.length;
-                setActionNotes(prev => [...prev, `Cleared ${beforeCount - afterCount} non-special asteroids`]);
-              }}
-              className="w-full px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded"
-            >
-              Clear to Special Only
-            </button>
-            <button
-              onClick={() => {
                 // Reset action notes
                 setActionNotes(["Game initialized", "Waiting for player action..."]);
               }}
               className="w-full px-2 py-1 bg-gray-600 hover:bg-gray-700 text-white text-xs rounded"
             >
               Clear Notes
+            </button>
+            <button
+              onClick={() => {
+                // Import quota tracker dynamically
+                import('./youtube/quotaTracker').then(({ quotaTracker }) => {
+                  const usage = quotaTracker.getTodayUsage();
+                  const remaining = quotaTracker.getRemainingQuota();
+                  const byEndpoint = quotaTracker.getUsageByEndpoint();
+                  const allEntries = quotaTracker.getTodayEntries();
+                  
+                  console.group('📊 YouTube API Quota Report');
+                  console.log(`%c═══════════════════════════════════════════`, 'color: cyan');
+                  console.log(`%c📈 DAILY QUOTA SUMMARY`, 'color: yellow; font-weight: bold; font-size: 14px');
+                  console.log(`%c═══════════════════════════════════════════`, 'color: cyan');
+                  console.log(`%cTotal Used:     ${usage} / 10,000 units`, usage > 7000 ? 'color: red; font-weight: bold' : usage > 5000 ? 'color: orange' : 'color: green');
+                  console.log(`%cRemaining:      ${remaining} units`, remaining < 3000 ? 'color: red' : 'color: green');
+                  console.log(`%cUsage:          ${((usage / 10000) * 100).toFixed(1)}%`, 'color: cyan');
+                  console.log('');
+                  
+                  console.log(`%c═══════════════════════════════════════════`, 'color: cyan');
+                  console.log(`%c📋 USAGE BY ENDPOINT`, 'color: yellow; font-weight: bold; font-size: 14px');
+                  console.log(`%c═══════════════════════════════════════════`, 'color: cyan');
+                  
+                  if (Object.keys(byEndpoint).length === 0) {
+                    console.log('%cNo API calls made today', 'color: gray; font-style: italic');
+                  } else {
+                    Object.entries(byEndpoint).forEach(([endpoint, data]: [string, { count: number; totalCost: number }]) => {
+                      console.log(`%c${endpoint}`, 'color: white; font-weight: bold');
+                      console.log(`  ├─ Calls:  ${data.count}`);
+                      console.log(`  └─ Cost:   ${data.totalCost} units`);
+                    });
+                  }
+                  console.log('');
+                  
+                  console.log(`%c═══════════════════════════════════════════`, 'color: cyan');
+                  console.log(`%c📝 RECENT API CALLS (Last 10)`, 'color: yellow; font-weight: bold; font-size: 14px');
+                  console.log(`%c═══════════════════════════════════════════`, 'color: cyan');
+                  
+                  const recent = allEntries.slice(-10).reverse();
+                  if (recent.length === 0) {
+                    console.log('%cNo recent calls', 'color: gray; font-style: italic');
+                  } else {
+                    recent.forEach((entry: { timestamp: number; success: boolean; endpoint: string; cost: number; error?: string }) => {
+                      const time = new Date(entry.timestamp).toLocaleTimeString();
+                      const status = entry.success ? '✅' : '❌';
+                      const color = entry.success ? 'color: green' : 'color: red';
+                      console.log(`${status} %c${time}%c - ${entry.endpoint} (${entry.cost} units)`, color, 'color: white', entry.error ? `\n   Error: ${entry.error}` : '');
+                    });
+                  }
+                  console.log('');
+                  
+                  console.log(`%c═══════════════════════════════════════════`, 'color: cyan');
+                  console.log(`%c💰 API COST REFERENCE`, 'color: yellow; font-weight: bold; font-size: 14px');
+                  console.log(`%c═══════════════════════════════════════════`, 'color: cyan');
+                  console.log('%csearch.list            100 units  (Channel search)', 'color: orange; font-weight: bold');
+                  console.log('%cchannels.list          1 unit     (Channel details)', 'color: lightgreen');
+                  console.log('%cplaylistItems.list     1 unit     (Playlist videos)', 'color: lightgreen');
+                  console.log('%cvideos.list            1 unit     (Video details)', 'color: lightgreen');
+                  console.log('%ccommentThreads.list    50 units   (Comments)', 'color: yellow');
+                  console.log('%csubscriptions.list     5 units    (Subscriptions)', 'color: yellow');
+                  console.log('');
+                  console.log(`%c═══════════════════════════════════════════`, 'color: cyan');
+                  console.groupEnd();
+                  
+                  setActionNotes(prev => [...prev, `YouTube API Report logged to console`]);
+                }).catch(err => {
+                  console.error('Failed to load quota tracker:', err);
+                });
+              }}
+              className="w-full px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded"
+            >
+              YouTube API Results
             </button>
             </div>
           </div>
@@ -5687,120 +5532,123 @@ ctx.strokeStyle = '#ffffff';
 
       <div
         ref={containerRef}
-        className={'bg-black rounded-lg p-4 shadow-2xl border border-cyan-500 relative'}
+        className={'bg-black rounded-lg p-4 shadow-2xl border border-cyan-500 relative z-10'}
+        style={{ cursor: 'crosshair' }}
       >
         <canvas
           ref={canvasRef}
+          style={{ cursor: 'inherit' }}
           width={canvasSize.w}
           height={canvasSize.h}
           className={'border border-gray-700 rounded cursor-none'}
         />
-        {/* Bottom-right MadeWithChat badge */}
+        
+        {/* Reward collection notifications */}
+        {rewardNotifications.map(notif => {
+          const now = Date.now();
+          const elapsed = now - notif.startTime;
+          const progress = elapsed / notif.duration;
+          const opacity = 1 - progress;
+          const offsetY = -progress * 30; // Float upward
+          
+          return (
+            <div
+              key={notif.id}
+              className="absolute pointer-events-none"
+              style={{
+                left: `${notif.x}px`,
+                top: `${notif.y + offsetY}px`,
+                transform: 'translate(-50%, -50%)',
+                opacity,
+                fontSize: '24px',
+                fontWeight: 'bold',
+                color: '#FFD700',
+                textShadow: '0 0 10px rgba(255, 215, 0, 0.8), 0 0 20px rgba(255, 215, 0, 0.5)',
+                letterSpacing: '2px',
+                zIndex: 100
+              }}
+            >
+              {notif.text}
+            </div>
+          );
+        })}
+        
+        {/* Bottom buttons row: Easy/Instructions/Resume/Fit/SongList/AutoFire - bottom aligned with ENERGY bar */}
+        <div className="absolute left-0 right-0 flex justify-center gap-2 opacity-20 hover:opacity-100 transition-opacity" style={{ bottom: '30px' }}>
+          <select
+            id="difficulty"
+            value={difficulty}
+            onChange={(e) => setDifficulty(e.target.value as 'easy' | 'medium' | 'hard')}
+            className="dock-select px-3 py-2"
+            aria-label="Difficulty"
+          >
+            <option value="easy">Easy</option>
+            <option value="medium">Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+          <button onClick={() => setShowInstructions(true)} className="dock-btn px-3 py-2">Instructions</button>
+          <button onClick={() => setIsPaused(p => !p)} className="dock-btn px-3 py-2">{isPaused ? 'Resume' : 'Pause'}</button>
+          <button onClick={onToggleFit} className="dock-btn px-3 py-2">{isFitted ? 'Original Size' : 'Fit to Window'}</button>
+          <button
+            type="button"
+            className="dock-btn px-3 py-2"
+            aria-expanded={showSongList}
+            aria-controls="songlist-panel"
+            onClick={() => setShowSongList((v) => !v)}
+          >{showSongList ? 'Hide Song List' : 'Song List'}</button>
+          <button
+            type="button"
+            className={`dock-btn px-3 py-2 ${autoFireEnabled ? 'bg-green-600 hover:bg-green-500' : 'bg-gray-600 hover:bg-gray-500'}`}
+            onClick={() => setAutoFireEnabled(prev => !prev)}
+            title={autoFireEnabled ? 'Auto-Fire: ON' : 'Auto-Fire: OFF'}
+          >
+            🎯 Auto-Fire: {autoFireEnabled ? 'ON' : 'OFF'}
+          </button>
+        </div>
+        
+        {/* MusicDock - positioned above buttons with reduced spacing */}
+        <div className="absolute bottom-12 left-0 right-0 flex justify-center px-6 transition-opacity duration-300" style={{ opacity: 0.2 }}
+          onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.opacity = '0.95'}
+          onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.opacity = '0.2'}>
+          <MusicDock
+            isPlaying={musicPlaying}
+            onPlayPause={handlePlayPauseMusic}
+            onPrev={handlePrevTrack}
+            onNext={handleNextTrack}
+            tracks={musicTracks.map(t => ({ name: formatTrackName(t.name), url: t.url }))}
+            currentIndex={musicIndex}
+            marqueeTitle={formatTrackName(musicTracks[musicIndex]?.name || '')}
+            muted={isMuted}
+            onToggleMute={controls.toggleMute}
+            musicVolume={musicVol}
+            onMusicVolume={controls.handleMusicVolume}
+            sfxVolume={sfxVol}
+            onSfxVolume={controls.handleSfxVolume}
+          />
+        </div>
+        
+        {/* Background dropdown moved to top button row */}
+        
+        {gameState.player.doubleShooter > 0 && (
+          <div className="absolute top-4 right-4 text-sm text-orange-400">Double Shot: {Math.ceil(gameState.player.doubleShooter / 60)}s</div>
+        )}
+        
+        {/* MadeWithChat badge - bottom aligned with ENERGY bar and menu buttons */}
       <a
         href="https://madewithchat.com"
         target="_blank"
         rel="noreferrer"
-        className="fixed right-4 z-50 flex items-center gap-2 opacity-80 hover:opacity-100 transition-opacity"
+        className="absolute z-40 flex items-center gap-2 opacity-60 hover:opacity-100 transition-opacity"
+        style={{ bottom: '30px', right: '50px' }}
         aria-label="MadeWithChat"
-        style={{ bottom: 'calc(var(--dock-offset,16px) + var(--dock-height,72px) + 8px)' }}
       >
-        <img src={mwcLogo} alt="MadeWithChat Logo" className="h-8 w-auto select-none" draggable={false} />
-        <span className="text-white/90 text-sm font-semibold">MadeWithChat</span>
+        <img src={mwcLogo} alt="MadeWithChat Logo" className="h-6 w-auto select-none" draggable={false} />
+        <span className="text-white/80 text-xs font-semibold">MadeWithChat</span>
       </a>
     </div>
       
+      {/* Song List and YouTube Settings - Below canvas */}
       <div className="mt-4 text-center text-white flex flex-col items-center gap-4 relative">
-        {/* Background tuning dropdown positioned bottom-right under gameplay area */}
-        <div className="">
-          <BackgroundDropdown
-            open={bgToolsOpen}
-            onToggle={() => setBgToolsOpen((o) => !o)}
-            onNextBackground={() => {
-              if (backdrops.length === 0) return;
-              const next = (backdropIndex + 1) % backdrops.length;
-              setBackdropIndex(next);
-              const img = new Image();
-              img.src = backdrops[next];
-              img.onload = () => { bgImageRef.current = img; };
-              img.onerror = () => { bgImageRef.current = null; };
-            }}
-            bgOpacity={bgOpacity}
-            bgContrast={bgContrast}
-            bgBrightness={bgBrightness}
-            setBgOpacity={setBgOpacity}
-            setBgContrast={setBgContrast}
-            setBgBrightness={setBgBrightness}
-            effectsApply={effectsApply}
-            setEffectsApply={setEffectsApply}
-            trailsEnabled={trailsEnabled}
-            setTrailsEnabled={setTrailsEnabled}
-            trailsStrength={trailsStrength}
-            setTrailsStrength={setTrailsStrength}
-            trailsTargets={trailsTargets}
-            setTrailsTargets={setTrailsTargets}
-          />
-        </div>
-        
-        {/* Row 1: Gameplay controls with Song List toggle on the right */}
-        <div className="flex gap-2 items-center w-full justify-between flex-wrap">
-          {/* Left: gameplay controls */}
-          <div className="flex gap-2 items-center flex-wrap">
-            <div className="flex items-center gap-2 px-1 py-1">
-              <label htmlFor="difficulty" className="sr-only">Difficulty</label>
-              <select
-                id="difficulty"
-                value={difficulty}
-                onChange={(e) => setDifficulty(e.target.value as 'easy' | 'medium' | 'hard')}
-                className="dock-select"
-                aria-label="Difficulty"
-              >
-                <option value="easy">Easy</option>
-                <option value="medium">Medium</option>
-                <option value="hard">Hard</option>
-              </select>
-            </div>
-
-            <button onClick={() => setShowInstructions(true)} className="dock-btn">Instructions</button>
-            <button onClick={() => setIsPaused(p => !p)} className="dock-btn">{isPaused ? 'Resume' : 'Pause'}</button>
-            <button onClick={toggleFitToWindow} className="dock-btn">{isFitted ? 'Original Size' : 'Fit to Window'}</button>
-          </div>
-          {/* Right: Song List toggle */}
-          <div className="ml-auto">
-            <button
-              type="button"
-              className="dock-btn"
-              aria-expanded={showSongList}
-              aria-controls="songlist-panel"
-              aria-live="polite"
-              onClick={() => setShowSongList((v) => !v)}
-            >{showSongList ? 'Hide Song List' : 'Song List'}</button>
-          </div>
-        </div>
-
-        {/* Song List: use the original small-pill list, just hidden until toggled */}
-        {/* Rendering of the original list moved below and gated by showSongList */}
-
-        {/* MusicDock bottom bar */}
-        <MusicDock
-          isPlaying={musicPlaying}
-          onPlayPause={handlePlayPauseMusic}
-          onPrev={handlePrevTrack}
-          onNext={handleNextTrack}
-          tracks={musicTracks.map(t => ({ name: formatTrackName(t.name), url: t.url }))}
-          currentIndex={musicIndex}
-          marqueeTitle={formatTrackName(musicTracks[musicIndex]?.name || '')}
-          muted={isMuted}
-          onToggleMute={toggleMute}
-          musicVolume={musicVol}
-          onMusicVolume={handleMusicVolume}
-          sfxVolume={sfxVol}
-          onSfxVolume={handleSfxVolume}
-        />
-        
-        {gameState.player.doubleShooter > 0 && (
-          <div className="text-sm text-orange-400">Double Shot: {Math.ceil(gameState.player.doubleShooter / 60)}s</div>
-        )}
-      </div>
       {showInstructions && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
           <div className="bg-gray-900 text-white max-w-lg w-full mx-4 rounded-lg shadow-xl border border-cyan-500">
@@ -5959,30 +5807,328 @@ ctx.strokeStyle = '#ffffff';
       
       {/* Track list with subtle red glow (original). Shown only when Song List is toggled. */}
       {showSongList && musicTracks.length > 0 && (
-        <div className="mt-3 w-full max-w-4xl flex flex-wrap justify-center gap-2">
-          {musicTracks.map((t, i) => (
-            <button
-              key={t.url}
-              onClick={() => {
-                setMusicIndex(i);
-                soundSystem.selectMusicTrack(i);
-                if (!isMuted) {
-                  safePlayMusic(i);
-                }
-              }}
-              className={
-                `px-1.5 py-0.5 rounded text-[0.5rem] transition-transform ` +
-                `${i === musicIndex ? 'bg-red-700/40 text-white ring-1 ring-red-400' : 'bg-gray-800/60 text-gray-200'} ` +
-                // Only risqué tracks (S*) keep the red glow
-                `${/^s\d+/i.test(t.name) ? 'shadow-[0_0_10px_rgba(255,0,0,0.35)]' : ''} ` +
-                `hover:scale-105`
-              }
-              title={t.name}
-            >
-              {formatTrackName(t.name)}
-            </button>
-          ))}
+        <div ref={songListRef} className="mt-3 mb-32 w-full max-w-4xl bg-gray-800/40 backdrop-blur-sm rounded-lg p-4 border border-gray-700/50">
+          <div className="flex flex-col gap-4">
+            {/* Header */}
+            <div className="flex items-center gap-2 border-b border-gray-700/50 pb-2">
+              <span className="text-red-400 text-lg">♫</span>
+              <h3 className="text-white font-semibold text-sm">Music & Playlist</h3>
+            </div>
+            
+            {/* Local Track List */}
+            <div className="flex flex-col gap-2">
+              <p className="text-gray-400 text-xs font-medium">Local Songs:</p>
+              <div className="flex flex-wrap gap-2">
+                {musicTracks.map((t, i) => (
+                  <button
+                    key={t.url}
+                    onClick={() => {
+                      setMusicIndex(i);
+                      // Start playback of this track immediately; if muted, it will be silent but timeline continues
+                      safePlayMusic(i);
+                    }}
+                    className={
+                      `px-1.5 py-0.5 rounded text-[0.5rem] transition-transform ` +
+                      `${i === musicIndex ? 'bg-red-700/40 text-white ring-1 ring-red-400' : 'bg-gray-800/60 text-gray-200'} ` +
+                      // Only risqué tracks (S*) keep the red glow
+                      `${/^s\d+/i.test(t.name) ? 'shadow-[0_0_10px_rgba(255,0,0,0.35)]' : ''} ` +
+                      `hover:scale-105`
+                    }
+                    title={t.name}
+                  >
+                    {formatTrackName(t.name)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {/* YouTube Music Settings */}
+            <div className="flex flex-col gap-3 pt-3 border-t border-gray-700/30">
+              
+              {/* Enable/Disable YouTube */}
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={youtubeEnabled}
+                  onChange={async (e) => {
+                    const enabled = e.target.checked;
+                    setYouTubeEnabled(enabled);
+                    soundSystem.setYouTubeEnabled(enabled);
+                    
+                    if (enabled) {
+                      // Initialize YouTube and switch to YouTube-only mode
+                      console.log('🚀 User enabled YouTube - initializing...');
+                      await soundSystem.initYouTube();
+                      
+                      // Switch to YouTube Only mode
+                      setMusicSource('youtube');
+                      await soundSystem.setMusicSource('youtube');
+                      
+                      // Stop current music and play a YouTube song after brief delay
+                      // Delay prevents race condition with mode change
+                      soundSystem.stopMusic();
+                      setTimeout(() => {
+                        soundSystem.playMusic().catch(() => {});
+                      }, 500); // Increased delay to let mode change settle
+                    } else {
+                      // Disabled YouTube - switch back to local
+                      setMusicSource('local');
+                      await soundSystem.setMusicSource('local');
+                      
+                      // Pick random local song
+                      const tracks = soundSystem.getMusicTracks();
+                      const randomIndex = Math.floor(Math.random() * tracks.length);
+                      soundSystem.stopMusic();
+                      setTimeout(() => {
+                        soundSystem.playMusic(randomIndex).catch(() => {});
+                      }, 100);
+                    }
+                  }}
+                  className="w-4 h-4 rounded border-gray-600 text-red-600 focus:ring-2 focus:ring-red-500 focus:ring-offset-0 focus:ring-offset-gray-900"
+                />
+                <span className="text-gray-300 text-sm group-hover:text-white transition-colors">
+                  Enable YouTube Music (from @OutlawAlgorithm)
+                </span>
+              </label>
+              
+              {/* Music Source Selection */}
+              {youtubeEnabled && (
+                <div className="flex flex-col gap-2 pl-7">
+                  <label className="text-gray-400 text-xs font-medium">Music Mix:</label>
+                  <select
+                    value={musicSource}
+                    onChange={async (e) => {
+                      const source = e.target.value as MusicSource;
+                      setMusicSource(source);
+                      
+                      // Initialize YouTube if switching to mixed or youtube mode
+                      if (source === 'mixed' || source === 'youtube') {
+                        await soundSystem.initYouTube();
+                      }
+                      
+                      await soundSystem.setMusicSource(source);
+                      
+                      // Pick appropriate song for the mode
+                      soundSystem.stopMusic();
+                      setTimeout(() => {
+                        if (source === 'local') {
+                          // Pick random local song
+                          const tracks = soundSystem.getMusicTracks();
+                          const randomIndex = Math.floor(Math.random() * tracks.length);
+                          soundSystem.playMusic(randomIndex).catch(() => {});
+                        } else {
+                          // For mixed/youtube, let system pick
+                          soundSystem.playMusic().catch(() => {});
+                        }
+                      }, 300);
+                    }}
+                    className="bg-gray-900/60 border border-gray-600 text-gray-200 text-sm rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
+                  >
+                    <option value="mixed">Mixed (90% Local, 10% YouTube)</option>
+                    <option value="local">Local Songs Only</option>
+                    <option value="youtube">YouTube Only</option>
+                  </select>
+                  
+                  <p className="text-gray-500 text-xs italic mt-1">
+                    {musicSource === 'mixed' && '🎵 Random mix: 10% YouTube, 90% Local'}
+                    {musicSource === 'local' && '💿 Playing only downloaded songs'}
+                    {musicSource === 'youtube' && '📺 Streaming from YouTube channel'}
+                  </p>
+                  
+                  {/* YouTube API Quota Button */}
+                  <button
+                    onClick={() => setShowQuotaDisplay(true)}
+                    className="mt-2 px-3 py-2 bg-cyan-700 hover:bg-cyan-600 text-white text-xs rounded-lg border border-cyan-500 transition-colors flex items-center gap-2"
+                  >
+                    <span>📊</span>
+                    <span>API Quota Usage</span>
+                  </button>
+                </div>
+              )}
+              
+              {/* Channel Info Display */}
+              {youtubeEnabled && youtubeChannel && (
+                <div className="flex items-center gap-3 pl-7 pt-2 border-t border-gray-700/30">
+                  <img 
+                    src={youtubeChannel.thumbnail} 
+                    alt={youtubeChannel.title}
+                    className="w-10 h-10 rounded-full border border-red-500/30"
+                  />
+                  <div className="flex flex-col flex-1">
+                    <span className="text-gray-300 text-xs font-medium">{youtubeChannel.title}</span>
+                    <a 
+                      href={youtubeChannel.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-red-400 hover:text-red-300 text-xs transition-colors"
+                    >
+                      {youtubeChannel.handle}
+                    </a>
+                  </div>
+                </div>
+              )}
+              
+              {/* Custom Channel URL Input */}
+              {youtubeEnabled && (
+                <div className="flex flex-col gap-2 pl-7 pt-3 border-t border-gray-700/30 mt-3">
+                  <label className="text-gray-400 text-xs font-medium">Custom Music Channel:</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={customChannelUrl}
+                      onChange={(e) => {
+                        setCustomChannelUrl(e.target.value);
+                        setChannelError('');
+                      }}
+                      placeholder="https://www.youtube.com/@YourChannel"
+                      className="flex-1 bg-gray-900/60 border border-gray-600 text-gray-200 text-xs rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none placeholder-gray-500"
+                      disabled={channelLoading}
+                    />
+                    <button
+                      onClick={async () => {
+                        const url = customChannelUrl.trim();
+                        if (!url) {
+                          setChannelError('Please enter a channel URL');
+                          return;
+                        }
+                        
+                        // Validate URL format
+                        const { isValidYouTubeChannel } = await import('./config/youtube');
+                        if (!isValidYouTubeChannel(url)) {
+                          setChannelError('Invalid YouTube channel URL');
+                          return;
+                        }
+                        
+                        setChannelLoading(true);
+                        setChannelError('');
+                        
+                        try {
+                          // Clear cache and fetch new channel
+                          const { clearPlaylistCache, fetchYouTubePlaylist } = await import('./youtube/youtubeApi');
+                          clearPlaylistCache();
+                          
+                          const playlist = await fetchYouTubePlaylist(url, true); // forceRefresh = true
+                          if (!playlist) {
+                            setChannelError('Could not load channel. Check URL and try again.');
+                            return;
+                          }
+                          
+                          // Update channel state
+                          setYouTubeChannel(playlist.channel);
+                          
+                          // Stop current song and play from new channel
+                          soundSystem.stopMusic();
+                          setTimeout(() => {
+                            soundSystem.playMusic().catch(() => {});
+                          }, 100);
+                          
+                          setCustomChannelUrl(''); // Clear input on success
+                        } catch (error) {
+                          console.error('Error loading channel:', error);
+                          setChannelError('Failed to load channel');
+                        } finally {
+                          setChannelLoading(false);
+                        }
+                      }}
+                      disabled={channelLoading || !customChannelUrl.trim()}
+                      className={`px-4 py-2 rounded-lg text-xs font-medium transition-colors ${
+                        channelLoading || !customChannelUrl.trim()
+                          ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                          : 'bg-red-600 hover:bg-red-700 text-white'
+                      }`}
+                    >
+                      {channelLoading ? 'Loading...' : 'Load'}
+                    </button>
+                  </div>
+                  
+                  {channelError && (
+                    <p className="text-red-400 text-xs">⚠️ {channelError}</p>
+                  )}
+                  
+                  <p className="text-gray-500 text-xs italic">
+                    💡 Paste any YouTube music channel URL (e.g., @YourFavoriteArtist)
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
+      )}
+      </div>
+
+      {/* YouTube Credit Display (Bottom-Right) */}
+      <YouTubeCredit
+        video={youtubeVideo}
+        channel={youtubeChannel}
+        isPlaying={youtubeIsPlaying}
+      />
+
+      {/* Hidden YouTube Player Container (for IFrame API) */}
+      <div id="youtube-player" style={{ display: 'none' }}></div>
+
+      {/* YouTube Quota Display Modal */}
+      <YouTubeQuotaDisplay 
+        isOpen={showQuotaDisplay}
+        onClose={() => setShowQuotaDisplay(false)}
+      />
+
+      {/* Scoreboard Modal (shown on game over) */}
+      {showScoreboard && (
+        <Scoreboard
+          score={finalScore}
+          stage={finalStage}
+          rewardAmount={rewardAmount}
+          onComplete={() => {
+            setShowScoreboard(false);
+            // Reset game to menu or restart
+            initGame();
+          }}
+        />
+      )}
+
+      {/* Login/Register Modal */}
+      {showLoginModal && (
+        <LoginModal
+          onClose={() => setShowLoginModal(false)}
+          onSuccess={(user) => {
+            setCurrentUser(user);
+            setShowLoginModal(false);
+          }}
+        />
+      )}
+
+      {/* Leaderboard Modal */}
+      {showLeaderboard && (
+        <ScoreboardDisplay
+          onClose={() => setShowLeaderboard(false)}
+          targetScoreId={targetScoreIdLeaderboard}
+        />
+      )}
+
+      {/* Ticket Randomizer Modal */}
+      {showTicketRandomizer && (
+        <TicketRandomizer
+          flipitPercent={randomizerFlipitPercent}
+          stage={gameState.stage}
+          onComplete={handleTicketRandomizerComplete}
+        />
+      )}
+
+      {/* Mobile Touch Controls */}
+      {isMobile && (
+        <>
+          {/* Virtual Joystick - Left Side */}
+          <div className="fixed bottom-4 left-4 z-50">
+            <VirtualJoystick onMove={handleJoystickMove} size={140} />
+          </div>
+
+          {/* Touch Controls - Right Side */}
+          <TouchControls
+            onFire={handleTouchFire}
+            onMissile={handleTouchMissile}
+            onDash={handleTouchDash}
+          />
+        </>
       )}
     </div>
   );

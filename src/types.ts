@@ -3,6 +3,41 @@ export interface Vector2 {
   y: number;
 }
 
+// Phase C(3a): Docking state for player
+export type DockPhase = 'approach' | 'docked';
+export interface PlayerDock {
+  kind: 'refuel';
+  phase: DockPhase;
+  startedAt: number; // ms timeline (use frameNow)
+  station: 'refuel';
+  savedV?: { vx: number; vy: number }; // station's paused velocity
+  undockAt?: number; // optional ms timestamp to release after full
+  // Optional cinematic sub-phase timings
+  arcT0?: number;
+  setdownT0?: number;
+  egressT0?: number;
+  // Manual abort
+  abortHoldSince?: number;
+}
+
+// Reward docking lifecycle (Phase C3b)
+export type RewardDockPhase = 'approach' | 'docked' | 'eject' | 'done';
+export interface RewardDock {
+  kind: 'reward';
+  phase: RewardDockPhase;
+  startedAt: number; // ms timeline (use frameNow)
+  station: 'reward';
+  savedV?: { vx: number; vy: number };
+  ejectAt?: number;
+  finishedAt?: number;
+  // Optional cinematic sub-phase timings
+  arcT0?: number;
+  setdownT0?: number;
+  egressT0?: number;
+  // Manual abort
+  abortHoldSince?: number;
+}
+
 export interface GameObject {
   position: Vector2;
   velocity: Vector2;
@@ -26,6 +61,12 @@ export interface Player extends GameObject {
   maxFuel?: number;         // capacity
   fuelLowThreshold?: number;      // warn level (e.g., 25% of max)
   fuelCriticalThreshold?: number; // critical level (e.g., 10% of max)
+  // Dash/Boost ability
+  dashCooldown?: number;    // Frames until next dash available (0 = ready)
+  dashActive?: boolean;     // Currently executing a dash
+  dashDuration?: number;    // Frames remaining in current dash
+  dashDirection?: Vector2;  // Direction vector of current dash
+  dashType?: 'forward' | 'backward' | 'left' | 'right'; // Type of dash for special effects
 }
 
 export interface Bonus extends GameObject {
@@ -52,6 +93,9 @@ export interface Asteroid extends GameObject {
   glowColor?: 'red' | 'green';
   // Optional reward/flip chance associated with special asteroid
   flipitChance?: number;
+  // Optional transient edge glow (artifact contact), driven by draw layer using env.frameNow
+  edgeGlowUntil?: number;   // ms timestamp until which glow is visible
+  edgeGlowAngle?: number;   // radians, center angle of the glow arc
 }
 
 export interface AlienShip extends GameObject {
@@ -85,10 +129,20 @@ export interface AlienShip extends GameObject {
   // Doom sequence if not killed in time: 0=idle,1=to-center,2=vibrate,3=shrink,4=done
   doomStage?: number;
   doomTimer?: number; // frames remaining for current stage
+  // Science vessel thief properties
+  isScienceVessel?: boolean; // True if this is a science vessel thief
+  scienceRole?: 'primary' | 'secondary'; // Role in multi-vessel coordination
+  scienceState?: 'approaching' | 'docking' | 'fleeing' | 'patrolling' | 'hiding'; // Current AI state
+  scienceTargetAsteroid?: Asteroid | null; // Which Flipit asteroid to steal from
+  scienceDockProgress?: number; // 0-100, scan completion percentage
+  scienceDockStartTime?: number; // When docking started (performance.now())
+  scienceStealAttempted?: boolean; // Prevent multiple steal attempts
 }
 
 export interface Explosion {
   position: Vector2;
+  // Optional discriminator for specialized draw behavior; generic explosions omit this
+  kind?: string;
   particles: Array<{
     position: Vector2;
     velocity: Vector2;
@@ -142,6 +196,8 @@ export interface VisualDebris {
   kind: 'chunk' | 'dust'; // chunk = small polygon, dust = small circle
   rotation?: number;      // for chunks
   rotationSpeed?: number; // for chunks
+  // Optional artifact accent: dark-red edge stroke for chunks
+  edgeColor?: string;
 }
 
 export interface GameState {
@@ -190,12 +246,21 @@ export interface GameState {
   lives: number; // remaining lives
   respawning: boolean; // true during 3-2-1 countdown
   respawnCountdown: number; // frames until active (e.g., 180 for 3s)
+  // Current artifact/reward info from last scan (persists across docks, resets per level)
+  currentArtifact?: {
+    type: 'Flipit' | 'unknown'; // Will expand with more reward types
+    baseChance: number; // Base percentage (before stage multiplier)
+    finalChance: number; // After stage multiplier
+    scannedAt: number; // Timestamp when scanned
+  };
   // World tiling: which off-screen area the player occupies (0,0) is start tile
   worldTileX?: number;
   worldTileY?: number;
   // Off-screen special vehicles bound to specific world tiles
   refuelStation?: RefuelStation | null;
   rewardShip?: RewardShip | null;
+  // Phase C(3a/3b): lightweight docking state (refuel or reward)
+  dock?: PlayerDock | RewardDock;
 }
 
 // Tractor beam phases for discriminated union state
@@ -227,6 +292,11 @@ export interface RefuelStation {
   tileX: number;
   tileY: number;
   position: Vector2;
+  // Phase C(2): very slow drift lifecycle (optional to avoid ripple effects)
+  vx?: number; // px/s
+  vy?: number; // px/s
+  active?: boolean; // default true when present
+  cooldownUntil?: number; // ms timestamp when eligible to respawn
 }
 
 export interface RewardShip {
@@ -236,6 +306,11 @@ export interface RewardShip {
   velocity?: Vector2;
   escortTimer?: number;
   departTimer?: number;
+  // Phase C(2): match refuel station lifecycle fields for drift/respawn
+  vx?: number; // px/s
+  vy?: number; // px/s
+  active?: boolean;
+  cooldownUntil?: number;
 }
 
 // Minimal track info shape used by UI and sounds API
