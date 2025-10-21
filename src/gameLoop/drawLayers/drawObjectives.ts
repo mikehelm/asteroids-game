@@ -223,7 +223,7 @@ export function drawObjectives(
         ctx.save();
         ctx.fillStyle = '#2b6e62';
         ctx.strokeStyle = '#66d9aa';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 1.5;
         const hullW = 140, hullH = 68, r = 16;
         const rx = -hullW / 2, ry = -hullH / 2;
         ctx.beginPath();
