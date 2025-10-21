@@ -40,6 +40,10 @@ export default function InfoPopup({ open, onClose }: Props) {
     let hasMouseMoved = false;
     let stuckCounter = 0; // Track how long ship has been stuck
     let waypoint: { x: number; y: number } | null = null; // Current pathfinding waypoint
+    let pathRecalcCooldown = 0; // Cooldown timer for path recalculation
+    let lastMouseX = canvas.width / 2;
+    let lastMouseY = canvas.height / 2;
+    let mouseMoveVelocity = 0; // Track mouse movement speed
 
     // Get forbidden zones from actual DOM elements
     const getForbiddenZones = (): Array<{ x: number; y: number; width: number; height: number }> => {
@@ -172,8 +176,18 @@ export default function InfoPopup({ open, onClose }: Props) {
     // Mouse/Touch tracking - attach to parent div to ensure it works
     const handleMouseMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
-      mouseX = ((e.clientX - rect.left) / rect.width) * canvas.width;
-      mouseY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+      const newMouseX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+      const newMouseY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+      
+      // Calculate mouse movement velocity
+      const dx = newMouseX - lastMouseX;
+      const dy = newMouseY - lastMouseY;
+      mouseMoveVelocity = Math.sqrt(dx * dx + dy * dy);
+      
+      lastMouseX = newMouseX;
+      lastMouseY = newMouseY;
+      mouseX = newMouseX;
+      mouseY = newMouseY;
       hasMouseMoved = true;
     };
 
@@ -181,8 +195,18 @@ export default function InfoPopup({ open, onClose }: Props) {
       if (e.touches.length > 0) {
         const touch = e.touches[0];
         const rect = canvas.getBoundingClientRect();
-        mouseX = ((touch.clientX - rect.left) / rect.width) * canvas.width;
-        mouseY = ((touch.clientY - rect.top) / rect.height) * canvas.height;
+        const newMouseX = ((touch.clientX - rect.left) / rect.width) * canvas.width;
+        const newMouseY = ((touch.clientY - rect.top) / rect.height) * canvas.height;
+        
+        // Calculate mouse movement velocity
+        const dx = newMouseX - lastMouseX;
+        const dy = newMouseY - lastMouseY;
+        mouseMoveVelocity = Math.sqrt(dx * dx + dy * dy);
+        
+        lastMouseX = newMouseX;
+        lastMouseY = newMouseY;
+        mouseX = newMouseX;
+        mouseY = newMouseY;
         hasMouseMoved = true;
         e.preventDefault(); // Prevent scrolling while touching
       }
@@ -310,6 +334,24 @@ export default function InfoPopup({ open, onClose }: Props) {
       
       // Start following mouse immediately (while cycling through tiers)
       {
+        // Decay mouse velocity to detect when it has settled
+        mouseMoveVelocity *= 0.9;
+        
+        // Decrement cooldown
+        if (pathRecalcCooldown > 0) pathRecalcCooldown--;
+        
+        // Recalculate path if mouse has settled and cooldown expired
+        if (mouseMoveVelocity < 2 && pathRecalcCooldown === 0) {
+          // Check if we need a new waypoint (mouse moved significantly or no waypoint)
+          const distToMouse = Math.sqrt((mouseX - shipX) ** 2 + (mouseY - shipY) ** 2);
+          
+          if (distToMouse > 50 && !waypoint) {
+            // Try to find a waypoint around obstacles
+            waypoint = findWaypoint(shipX, shipY, mouseX, mouseY);
+            pathRecalcCooldown = 30; // Wait 30 frames (~0.5s) before next recalc
+          }
+        }
+        
         // Determine target (waypoint or mouse)
         let targetX = mouseX;
         let targetY = mouseY;
@@ -322,8 +364,9 @@ export default function InfoPopup({ open, onClose }: Props) {
           // Check if we reached the waypoint
           const distToWaypoint = Math.sqrt((shipX - waypoint.x) ** 2 + (shipY - waypoint.y) ** 2);
           if (distToWaypoint < 30) {
-            // Reached waypoint, clear it
+            // Reached waypoint, clear it and recalculate
             waypoint = null;
+            pathRecalcCooldown = 0; // Allow immediate recalc
             stuckCounter = 0;
           }
         }
@@ -382,9 +425,10 @@ export default function InfoPopup({ open, onClose }: Props) {
             velocityX *= 0.5;
             velocityY *= 0.5;
             
-            // If stuck for too long, find a waypoint
-            if (stuckCounter > 30 && !waypoint) {
+            // If stuck for too long, find a waypoint immediately
+            if (stuckCounter > 20 && !waypoint) {
               waypoint = findWaypoint(shipX, shipY, mouseX, mouseY);
+              pathRecalcCooldown = 15; // Shorter cooldown when stuck
               stuckCounter = 0;
             }
           } else {
@@ -392,7 +436,7 @@ export default function InfoPopup({ open, onClose }: Props) {
           }
         }
         
-        // Rotate to face movement direction
+        // Rotate to face VELOCITY direction (where ship is actually moving)
         if (Math.abs(velocityX) > 0.1 || Math.abs(velocityY) > 0.1) {
           const targetRotation = Math.atan2(velocityY, velocityX);
           let rotDiff = targetRotation - rotation;
