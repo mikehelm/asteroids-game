@@ -259,22 +259,32 @@ export default function InfoPopup({ open, onClose }: Props) {
 
   return (
     <div className="ip-backdrop" role="dialog" aria-modal="true" onClick={onClose}>
-      <div className="ip-card" onClick={(e) => e.stopPropagation()}>
-        <button className="ip-close" aria-label="Close" onClick={onClose}>×</button>
+      <div className="ip-card" onClick={(e) => e.stopPropagation()} style={{ position: 'relative' }}>
+        {/* Full-size background canvas for ship */}
+        <canvas 
+          ref={canvasRef} 
+          width={780} 
+          height={900}
+          style={{ 
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            pointerEvents: 'none',
+            zIndex: 0
+          }}
+        />
         
-        {/* Hero Section */}
-        <div className="ip-hero">
-          <div className="ip-icon-burst">
-            <canvas 
-              ref={canvasRef} 
-              width={120} 
-              height={80}
-              style={{ display: 'block', margin: '0 auto' }}
-            />
+        {/* Content overlay */}
+        <div style={{ position: 'relative', zIndex: 1 }}>
+          <button className="ip-close" aria-label="Close" onClick={onClose}>×</button>
+          
+          {/* Hero Section */}
+          <div className="ip-hero">
+            <h2 className="ip-title">Flipit Asteroids</h2>
+            <p className="ip-subtitle">Play Free, Win Big</p>
           </div>
-          <h2 className="ip-title">Flipit Asteroids</h2>
-          <p className="ip-subtitle">Play Free, Win Big</p>
-        </div>
 
         {/* Features Grid */}
         <div className="ip-features">
@@ -311,11 +321,12 @@ export default function InfoPopup({ open, onClose }: Props) {
           </div>
         </div>
 
-        {/* CTA Button */}
-        <button className="ip-cta" onClick={onClose}>
-          <span className="ip-cta-main">Continue Playing</span>
-          <span className="ip-cta-sub">Good luck, pilot. 🛸</span>
-        </button>
+          {/* CTA Button */}
+          <button className="ip-cta" onClick={onClose}>
+            <span className="ip-cta-main">Continue Playing</span>
+            <span className="ip-cta-sub">Good luck, pilot. 🛸</span>
+          </button>
+        </div>
       </div>
     </div>
   );
