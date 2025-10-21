@@ -4578,6 +4578,16 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
       ctx.save();
       ctx.translate(shakeOffset.x, shakeOffset.y);
 
+      // Apply death sequence camera zoom (if active)
+      if (deathSequenceRef.current?.active && deathSequenceRef.current.cameraZoom !== 1.0) {
+        const offset = getDeathCameraOffset(deathSequenceRef.current, CANVAS_WIDTH, CANVAS_HEIGHT);
+        const zoom = deathSequenceRef.current.cameraZoom;
+        ctx.save();
+        ctx.translate(CANVAS_WIDTH/2, CANVAS_HEIGHT/2);
+        ctx.scale(zoom, zoom);
+        ctx.translate(-CANVAS_WIDTH/2 + offset.x, -CANVAS_HEIGHT/2 + offset.y);
+      }
+
       // 1) Background → returns bgMap
       const bgMap = drawBackground(ctx, gameState, env);
       // 2) Stars (uses bgMap)
@@ -4621,6 +4631,12 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
       drawExplosionsMod(ctx, gameState, env);
       // 9) Debris
       drawDebrisMod(ctx, gameState, env);
+      
+      // Restore death sequence camera zoom before drawing UI
+      if (deathSequenceRef.current?.active && deathSequenceRef.current.cameraZoom !== 1.0) {
+        ctx.restore();
+      }
+      
       // 10) UI overlays
       drawTractorOverlay(ctx, gameState, env);
       // 11) HUD

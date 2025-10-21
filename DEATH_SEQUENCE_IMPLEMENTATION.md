@@ -119,36 +119,28 @@ Implement dramatic slow-motion death sequence with camera zoom, explosion, and r
 **Goal:** Zoom camera in on death position, then zoom back out
 
 ### Tasks:
-- [ ] **4.1** Find main rendering code
-  - Location: Look for canvas context drawing
-  - Find where game objects are drawn
+- [x] **4.1** Find main rendering code
+  - Location: Line 4582+ in Game.tsx
+  - Found all game object drawing code
 
-- [ ] **4.2** Add camera transform wrapper
-  - Before drawing game objects
+- [x] **4.2** Add camera transform wrapper
+  - Added at line 4582 after screen shake
   - Check if `deathSequenceRef.current?.active`
   - Get offset: `getDeathCameraOffset(deathSequenceRef.current, CANVAS_WIDTH, CANVAS_HEIGHT)`
   - Get zoom: `deathSequenceRef.current.cameraZoom`
 
-- [ ] **4.3** Apply transform
-  ```typescript
-  if (deathSequenceRef.current?.active && deathSequenceRef.current.cameraZoom !== 1.0) {
-    ctx.save();
-    ctx.translate(CANVAS_WIDTH/2, CANVAS_HEIGHT/2);
-    ctx.scale(zoom, zoom);
-    ctx.translate(-CANVAS_WIDTH/2 + offset.x, -CANVAS_HEIGHT/2 + offset.y);
-  }
-  // ... draw all game objects ...
-  if (deathSequenceRef.current?.active && deathSequenceRef.current.cameraZoom !== 1.0) {
-    ctx.restore();
-  }
-  ```
+- [x] **4.3** Apply transform
+  - ctx.save() before game objects (line 4585)
+  - Apply translate → scale → translate transform
+  - ctx.restore() after game objects, before UI (line 4637)
+  - UI elements (HUD, overlays) NOT zoomed
 
 - [ ] **4.4** Test camera zoom
   - Verify zooms to 2.5x
   - Verify centers on death position
   - Verify zooms back out smoothly
 
-**Status:** ⏳ NOT STARTED  
+**Status:** ✅ COMPLETE (pending testing)  
 **Blockers:** Phase 3 should complete first (but can work in parallel)  
 **Notes:** Make sure to wrap ALL game object drawing, not UI elements
 
