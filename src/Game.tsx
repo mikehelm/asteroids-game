@@ -1119,14 +1119,29 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
   }, []);
 
   const handleTouchMissile = useCallback(() => {
-    const gs = gameStateRef.current;
-    if (!gs) return;
+    // Dispatch actual Enter key event to trigger missile firing
+    const enterEvent = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+      cancelable: true
+    });
+    window.dispatchEvent(enterEvent);
     
-    // Simulate Enter key press for missile
-    gs.keys['Enter'] = true;
+    // Clean up after a short delay
     setTimeout(() => {
-      if (gs) delete gs.keys['Enter'];
-    }, 100);
+      const enterUpEvent = new KeyboardEvent('keyup', {
+        key: 'Enter',
+        code: 'Enter',
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true
+      });
+      window.dispatchEvent(enterUpEvent);
+    }, 50);
   }, []);
 
   const handleTouchDash = useCallback((direction: 'forward' | 'backward' | 'left' | 'right') => {
