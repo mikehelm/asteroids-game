@@ -29,14 +29,14 @@ export default function InfoPopup({ open, onClose }: Props) {
 
     startTimeRef.current = performance.now();
     
-    // Flight state
-    let shipX = canvas.width / 2;
-    let shipY = canvas.height / 2;
+    // Flight state - start in top left corner
+    let shipX = 40;
+    let shipY = 40;
     let velocityX = 0;
     let velocityY = 0;
     let rotation = -Math.PI / 2; // Point up initially
-    let mouseX = shipX;
-    let mouseY = shipY;
+    let mouseX = canvas.width / 2;
+    let mouseY = canvas.height / 2;
     let hasMouseMoved = false;
 
     // Obstacle zones (text sections to avoid)
