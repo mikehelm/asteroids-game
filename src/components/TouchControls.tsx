@@ -1,4 +1,5 @@
 import React, { useRef, useCallback } from 'react';
+import './TouchControls.css';
 
 interface TouchControlsProps {
   onFire: (active: boolean) => void;
@@ -22,8 +23,15 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
     onFire(false);
   }, [onFire]);
 
-  const handleMissileClick = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+  const handleMissileTouch = useCallback((e: React.TouchEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    onMissile();
+  }, [onMissile]);
+
+  const handleMissileClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
     onMissile();
   }, [onMissile]);
 
@@ -70,7 +78,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
   }, [onDash]);
 
   return (
-    <div className="fixed bottom-4 right-4 flex flex-col gap-3 select-none">
+    <div className="fixed bottom-4 right-4 flex flex-col gap-3 select-none touch-controls-container">
       {/* Dash Zone (swipe area) */}
       <div
         className="relative w-32 h-32 rounded-full bg-purple-600/20 border-2 border-purple-400/40 flex items-center justify-center"
@@ -106,7 +114,7 @@ export const TouchControls: React.FC<TouchControlsProps> = ({
       {/* Missile Button */}
       <button
         className="w-32 h-32 rounded-full bg-yellow-600/80 border-4 border-yellow-400 flex items-center justify-center active:bg-yellow-500 active:scale-95 transition-all shadow-lg"
-        onTouchStart={handleMissileClick}
+        onTouchStart={handleMissileTouch}
         onClick={handleMissileClick}
         style={{
           boxShadow: '0 0 20px rgba(234, 179, 8, 0.6)',

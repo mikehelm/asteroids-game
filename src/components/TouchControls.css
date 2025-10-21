@@ -1,0 +1,37 @@
+/* Touch Controls - iPad/Tablet Responsive Layout */
+
+/* Default mobile positioning */
+.touch-controls-container {
+  z-index: 50;
+}
+
+/* iPad/Tablet landscape - adjust positioning */
+@media (min-width: 721px) and (max-width: 1366px) and (orientation: landscape) {
+  .touch-controls-container {
+    bottom: 16px !important;
+    right: 16px !important;
+  }
+  
+  /* Slightly smaller buttons for landscape */
+  .touch-controls-container > div,
+  .touch-controls-container > button {
+    width: 110px !important;
+    height: 110px !important;
+  }
+}
+
+/* iPad/Tablet portrait - adjust positioning */
+@media (min-width: 721px) and (max-width: 1024px) and (orientation: portrait) {
+  .touch-controls-container {
+    bottom: 16px !important;
+    right: 16px !important;
+  }
+}
+
+/* Ensure buttons are always clickable */
+.touch-controls-container button {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
