@@ -4764,6 +4764,120 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
         ctx.restore();
       }
       
+      // Pause overlay with animated ship
+      if (isPausedRef.current && gameState.gameRunning) {
+        ctx.save();
+        
+        // Semi-transparent dark overlay
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        
+        // Animated ship in header area
+        const shipAnimTime = frameNow / 1000; // seconds
+        
+        // Cycle through health states every 2 seconds
+        const healthCycle = (Math.floor(shipAnimTime / 2) % 4) / 3; // 0, 0.33, 0.66, 1
+        
+        // Ship flies in a circular pattern in the top area
+        const headerHeight = 120;
+        const pathRadius = 80;
+        const centerX = CANVAS_WIDTH / 2;
+        const centerY = headerHeight / 2;
+        const shipX = centerX + Math.cos(shipAnimTime * 0.5) * pathRadius;
+        const shipY = centerY + Math.sin(shipAnimTime * 0.5) * pathRadius * 0.5; // Elliptical
+        const shipRotation = Math.atan2(Math.sin(shipAnimTime * 0.5) * 0.5, Math.cos(shipAnimTime * 0.5)) + Math.PI / 2;
+        
+        // Draw the ship (same as player ship but scaled up)
+        ctx.save();
+        ctx.translate(shipX, shipY);
+        ctx.rotate(shipRotation);
+        
+        const shipSize = 25; // Larger than normal player ship
+        
+        // Determine ship color based on health cycle
+        let shipColor, glowColor;
+        if (healthCycle > 0.66) {
+          // Full health - green
+          shipColor = '#00ff66';
+          glowColor = '#00ff66';
+        } else if (healthCycle > 0.33) {
+          // Medium health - yellow
+          shipColor = '#ffcc00';
+          glowColor = '#ffcc00';
+        } else {
+          // Low health - red
+          shipColor = '#ff3333';
+          glowColor = '#ff3333';
+        }
+        
+        // Glow effect
+        ctx.shadowColor = glowColor;
+        ctx.shadowBlur = 20;
+        
+        // Draw ship body (triangle)
+        ctx.fillStyle = shipColor;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(0, -shipSize);
+        ctx.lineTo(-shipSize * 0.6, shipSize * 0.7);
+        ctx.lineTo(shipSize * 0.6, shipSize * 0.7);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        
+        // Draw cockpit detail
+        ctx.fillStyle = 'rgba(100, 200, 255, 0.6)';
+        ctx.beginPath();
+        ctx.arc(0, -shipSize * 0.3, shipSize * 0.25, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Draw engine flames (animated)
+        const flameLength = 10 + Math.sin(shipAnimTime * 10) * 5;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = '#ff6600';
+        ctx.fillStyle = '#ff6600';
+        ctx.beginPath();
+        ctx.moveTo(-shipSize * 0.3, shipSize * 0.7);
+        ctx.lineTo(-shipSize * 0.15, shipSize * 0.7 + flameLength);
+        ctx.lineTo(0, shipSize * 0.7);
+        ctx.closePath();
+        ctx.fill();
+        
+        ctx.beginPath();
+        ctx.moveTo(shipSize * 0.3, shipSize * 0.7);
+        ctx.lineTo(shipSize * 0.15, shipSize * 0.7 + flameLength);
+        ctx.lineTo(0, shipSize * 0.7);
+        ctx.closePath();
+        ctx.fill();
+        
+        ctx.restore();
+        
+        // PAUSED text
+        const centerTextX = CANVAS_WIDTH / 2;
+        const centerTextY = CANVAS_HEIGHT / 2;
+        
+        ctx.font = 'bold 120px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.lineWidth = 4;
+        ctx.shadowColor = 'rgba(100, 200, 255, 0.8)';
+        ctx.shadowBlur = 20;
+        ctx.strokeText('PAUSED', centerTextX, centerTextY);
+        ctx.fillText('PAUSED', centerTextX, centerTextY);
+        
+        // Instruction text
+        ctx.font = 'bold 32px Arial';
+        ctx.fillStyle = 'rgba(200, 200, 200, 0.9)';
+        ctx.shadowBlur = 10;
+        ctx.strokeText('Press P to Resume', centerTextX, centerTextY + 80);
+        ctx.fillText('Press P to Resume', centerTextX, centerTextY + 80);
+        
+        ctx.restore();
+      }
+      
       // Draw LOST sequence countdown in center of screen
       const traction = tractionBeamRef.current;
       const lostSeq = (traction as any).lostSequence;
