@@ -1403,6 +1403,42 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
       const prevX = gameState.player.position.x;
       const prevY = gameState.player.position.y;
       
+      // Trigger explosion when entering explosion phase
+      if (deathSequenceRef.current?.phase === 'explosion' && !(deathSequenceRef.current as any).explosionTriggered) {
+        console.log('💥 Triggering death explosion!');
+        (deathSequenceRef.current as any).explosionTriggered = true;
+        
+        // Create large explosion at death position
+        const deathPos = deathSequenceRef.current.deathPosition;
+        for (let i = 0; i < 30; i++) {
+          const angle = (Math.PI * 2 * i) / 30;
+          const speed = 2 + Math.random() * 3;
+          const explosion = createExplosion(deathPos, env as any);
+          gameState.explosions.push(explosion);
+        }
+        
+        // Create ship debris
+        for (let i = 0; i < 8; i++) {
+          const angle = (Math.PI * 2 * i) / 8;
+          const speed = 1 + Math.random() * 2;
+          const debris: VisualDebris = {
+            position: { ...deathPos },
+            velocity: {
+              x: Math.cos(angle) * speed,
+              y: Math.sin(angle) * speed
+            },
+            rotation: Math.random() * Math.PI * 2,
+            rotationSpeed: (Math.random() - 0.5) * 0.2,
+            life: 180,
+            maxLife: 180,
+            color: i % 2 === 0 ? '#00ffff' : '#ffffff',
+            size: 3 + Math.random() * 2,
+            kind: 'generic'
+          };
+          gameState.visualDebris?.push(debris);
+        }
+      }
+      
       // Set reversed controls flag for player update
       (gameState as any).reversedControls = Date.now() < reversedControlsUntilRef.current;
       (gameState as any).bubbleEffect = Date.now() < bubbleEffectUntilRef.current;
@@ -4621,13 +4657,14 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
       ctx.translate(shakeOffset.x, shakeOffset.y);
 
       // Apply death sequence camera zoom (if active)
-      if (deathSequenceRef.current?.active && deathSequenceRef.current.cameraZoom !== 1.0) {
+      if (deathSequenceRef.current?.active) {
         const offset = getDeathCameraOffset(deathSequenceRef.current, CANVAS_WIDTH, CANVAS_HEIGHT);
         const zoom = deathSequenceRef.current.cameraZoom;
         ctx.save();
         ctx.translate(CANVAS_WIDTH/2, CANVAS_HEIGHT/2);
         ctx.scale(zoom, zoom);
         ctx.translate(-CANVAS_WIDTH/2 + offset.x, -CANVAS_HEIGHT/2 + offset.y);
+        console.log('🎥 Camera zoom:', zoom.toFixed(2), 'offset:', offset);
       }
 
       // 1) Background → returns bgMap
@@ -4640,10 +4677,15 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
       {
         const tBeam = tractionBeamRef.current as any;
         const showShipOnTop = !!(tBeam && (tBeam.active || (tBeam.onTopEntry && tBeam.onTopEntry.inProgress)));
+        // Don't draw player during death sequence explosion phase
+        const hidePlayer = deathSequenceRef.current?.phase === 'explosion';
+        
         if (showShipOnTop) {
           // Special below ship, normals above
           drawSpecialAsteroidsMod(ctx, gameState, env);
-          withPlayerDockingXform(ctx, gameState, env, () => { drawPlayerMod(ctx, gameState, env); });
+          if (!hidePlayer) {
+            withPlayerDockingXform(ctx, gameState, env, () => { drawPlayerMod(ctx, gameState, env); });
+          }
           try { drawShield(ctx, gameState, env); } catch {}
           drawNormalAsteroidsMod(ctx, gameState, env);
           // Grid last for visibility
@@ -4651,7 +4693,9 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
         } else {
           // Even when not showing ship on top, keep same depth plan for docking visuals
           drawSpecialAsteroidsMod(ctx, gameState, env);
-          withPlayerDockingXform(ctx, gameState, env, () => { drawPlayerMod(ctx, gameState, env); });
+          if (!hidePlayer) {
+            withPlayerDockingXform(ctx, gameState, env, () => { drawPlayerMod(ctx, gameState, env); });
+          }
           drawNormalAsteroidsMod(ctx, gameState, env);
           try { drawShield(ctx, gameState, env); } catch {}
           // Grid last
@@ -4675,7 +4719,7 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
       drawDebrisMod(ctx, gameState, env);
       
       // Restore death sequence camera zoom before drawing UI
-      if (deathSequenceRef.current?.active && deathSequenceRef.current.cameraZoom !== 1.0) {
+      if (deathSequenceRef.current?.active) {
         ctx.restore();
       }
       
