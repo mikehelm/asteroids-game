@@ -41,6 +41,7 @@ import {
 import { LASER_HIT_DAMAGE, MISSILE_HIT_DAMAGE } from './gameLoop/constants';
 import { ExplosionDistortionManager } from './effects/ExplosionDistortion';
 import { applyVelocityCap, VELOCITY_CAPS } from './systems/velocityCap';
+import { createDeathSequence, updateDeathSequence, getDeathCameraOffset, shouldFreezeGameplay, shouldShowExplosion, shouldShowRespawn, getRespawnProgress } from './systems/cinematicDeath';
 import TitleBanner from './ui/TitleBanner';
 import MusicDock from './ui/MusicDock';
 import InfoPopup from './ui/InfoPopup';
