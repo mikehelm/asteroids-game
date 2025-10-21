@@ -48,7 +48,8 @@ export default function InfoPopup({ open, onClose }: Props) {
       
       // Get all elements with specific classes that should be avoided
       const selectors = [
-        '.ip-title',          // Just the title text (not whole hero area)
+        '.ip-title',          // Title text
+        '.ip-subtitle',       // Subtitle text  
         '.ip-feature',        // Feature boxes
         '.ip-featured-badge', // Orange button
         '.ip-featured-card',  // Invite friends container
@@ -60,13 +61,17 @@ export default function InfoPopup({ open, onClose }: Props) {
         elements.forEach(el => {
           const rect = el.getBoundingClientRect();
           
-          // Convert to canvas coordinates
-          const x = ((rect.left - canvasRect.left) / canvasRect.width) * canvas.width;
-          const y = ((rect.top - canvasRect.top) / canvasRect.height) * canvas.height;
-          const width = (rect.width / canvasRect.width) * canvas.width;
-          const height = (rect.height / canvasRect.height) * canvas.height;
+          // Convert to canvas coordinates with tighter bounds (reduce padding)
+          const padding = 10; // Reduce zone by 10px on each side
+          const x = ((rect.left - canvasRect.left) / canvasRect.width) * canvas.width + padding;
+          const y = ((rect.top - canvasRect.top) / canvasRect.height) * canvas.height + padding;
+          const width = (rect.width / canvasRect.width) * canvas.width - (padding * 2);
+          const height = (rect.height / canvasRect.height) * canvas.height - (padding * 2);
           
-          zones.push({ x, y, width, height });
+          // Only add if zone is still valid after padding reduction
+          if (width > 0 && height > 0) {
+            zones.push({ x, y, width, height });
+          }
         });
       });
       
