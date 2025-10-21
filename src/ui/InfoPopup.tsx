@@ -19,7 +19,7 @@ export default function InfoPopup({ open, onClose }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
-  // Animate ship
+  // Animate ship with realistic flight
   useEffect(() => {
     if (!open || !canvasRef.current) return;
 
@@ -28,92 +28,218 @@ export default function InfoPopup({ open, onClose }: Props) {
     if (!ctx) return;
 
     startTimeRef.current = performance.now();
+    
+    // Flight state
+    let shipX = canvas.width / 2;
+    let shipY = canvas.height / 2;
+    let velocityX = 0;
+    let velocityY = 0;
+    let rotation = -Math.PI / 2; // Point up initially
+    let targetX = shipX;
+    let targetY = shipY;
+    let isMoving = false;
+    let nextTargetTime = 0;
+
+    // Ship rendering functions (from game)
+    const drawTier1 = (ctx: CanvasRenderingContext2D) => {
+      ctx.strokeStyle = '#00ffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(15, 0);
+      ctx.lineTo(-10, -8);
+      ctx.lineTo(-5, 0);
+      ctx.lineTo(-10, 8);
+      ctx.closePath();
+      ctx.stroke();
+    };
+
+    const drawTier2 = (ctx: CanvasRenderingContext2D) => {
+      ctx.strokeStyle = '#7ffcff';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(15, 0);
+      ctx.lineTo(-10, -8);
+      ctx.lineTo(-5, 0);
+      ctx.lineTo(-10, 8);
+      ctx.closePath();
+      ctx.stroke();
+    };
+
+    const drawTier3 = (ctx: CanvasRenderingContext2D, time: number) => {
+      const hue = Math.floor((time * 60) % 360);
+      ctx.fillStyle = `hsl(${hue}, 80%, 55%)`;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(15, 0);
+      ctx.lineTo(-10, -8);
+      ctx.lineTo(-5, 0);
+      ctx.lineTo(-10, 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    };
+
+    const drawTier4 = (ctx: CanvasRenderingContext2D, time: number) => {
+      const hue = Math.floor((time * 60) % 360);
+      ctx.fillStyle = `hsl(${hue}, 80%, 55%)`;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(15, 0);
+      ctx.lineTo(-10, -8);
+      ctx.lineTo(-5, 0);
+      ctx.lineTo(-10, 8);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // side turrets
+      ctx.fillStyle = '#cccccc';
+      ctx.strokeStyle = '#999999';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.rect(-6, -10, 4, 6); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.rect(-6, 4, 4, 6); ctx.fill(); ctx.stroke();
+      // barrels
+      ctx.strokeStyle = '#dddddd';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-2, -7); ctx.lineTo(8, -7);
+      ctx.moveTo(-2, 7); ctx.lineTo(8, 7);
+      ctx.stroke();
+    };
+
+    const drawTier5 = (ctx: CanvasRenderingContext2D) => {
+      ctx.save();
+      ctx.translate(-2, 0);
+      ctx.fillStyle = '#88e0ff';
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(18, 0);
+      ctx.lineTo(2, -10);
+      ctx.lineTo(-12, -6);
+      ctx.lineTo(-6, 0);
+      ctx.lineTo(-12, 6);
+      ctx.lineTo(2, 10);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      // canopy
+      ctx.fillStyle = '#1b2a41';
+      ctx.beginPath();
+      ctx.ellipse(4, 0, 6, 4, 0, 0, 2 * Math.PI);
+      ctx.fill();
+      // fins
+      ctx.fillStyle = '#66d0ff';
+      ctx.beginPath(); ctx.moveTo(-8, -9); ctx.lineTo(-2, -4); ctx.lineTo(-12, -2); ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-8, 9);  ctx.lineTo(-2, 4);  ctx.lineTo(-12, 2);  ctx.closePath(); ctx.fill();
+      // nose detail
+      ctx.strokeStyle = '#dff6ff';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(12, 0); ctx.lineTo(17, 0); ctx.stroke();
+      ctx.restore();
+    };
 
     const animate = (now: number) => {
-      const elapsed = (now - startTimeRef.current) / 1000; // seconds
+      const elapsed = (now - startTimeRef.current) / 1000;
       
-      // Clear canvas
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       
-      // Determine health state based on time (1 second each, end on green)
-      let shipColor, glowColor;
-      if (elapsed < 1) {
-        // Red (low health)
-        shipColor = '#ff3333';
-        glowColor = '#ff3333';
-      } else if (elapsed < 2) {
-        // Yellow (medium health)
-        shipColor = '#ffcc00';
-        glowColor = '#ffcc00';
-      } else {
-        // Green (full health) - stays here
-        shipColor = '#00ff66';
-        glowColor = '#00ff66';
-      }
+      // Determine tier based on time (1 second each, cycling through tiers)
+      let tier;
+      if (elapsed < 1) tier = 1;
+      else if (elapsed < 2) tier = 2;
+      else if (elapsed < 3) tier = 3;
+      else if (elapsed < 4) tier = 4;
+      else tier = 5; // Stay at tier 5 (healthiest)
       
-      // After 3 seconds, ship flies around in header area
-      let shipX, shipY, shipRotation;
-      if (elapsed < 3) {
-        // Centered during health cycle
-        shipX = canvas.width / 2;
-        shipY = canvas.height / 2;
-        shipRotation = 0;
-      } else {
-        // Flying around after health cycle complete
-        const flyTime = elapsed - 3;
-        const radius = 25;
-        shipX = canvas.width / 2 + Math.cos(flyTime * 1.2) * radius;
-        shipY = canvas.height / 2 + Math.sin(flyTime * 1.2) * radius * 0.6;
-        shipRotation = Math.atan2(Math.sin(flyTime * 1.2) * 0.6, Math.cos(flyTime * 1.2)) + Math.PI / 2;
+      // After 5 seconds, start flying around
+      if (elapsed >= 5) {
+        // Pick new target location every few seconds
+        if (now >= nextTargetTime) {
+          const margin = 30;
+          targetX = margin + Math.random() * (canvas.width - margin * 2);
+          targetY = margin + Math.random() * (canvas.height - margin * 2);
+          isMoving = true;
+          nextTargetTime = now + 2000 + Math.random() * 2000; // 2-4 seconds
+        }
+        
+        if (isMoving) {
+          // Calculate direction to target
+          const dx = targetX - shipX;
+          const dy = targetY - shipY;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          
+          if (distance > 5) {
+            // Accelerate towards target
+            const acceleration = 0.3;
+            const maxSpeed = 2;
+            velocityX += (dx / distance) * acceleration;
+            velocityY += (dy / distance) * acceleration;
+            
+            // Cap speed
+            const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+            if (speed > maxSpeed) {
+              velocityX = (velocityX / speed) * maxSpeed;
+              velocityY = (velocityY / speed) * maxSpeed;
+            }
+            
+            // Rotate to face movement direction
+            const targetRotation = Math.atan2(velocityY, velocityX);
+            let rotDiff = targetRotation - rotation;
+            // Normalize to -PI to PI
+            while (rotDiff > Math.PI) rotDiff -= 2 * Math.PI;
+            while (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
+            rotation += rotDiff * 0.1; // Smooth rotation
+          } else {
+            // Decelerate when close to target
+            velocityX *= 0.9;
+            velocityY *= 0.9;
+            if (Math.abs(velocityX) < 0.1 && Math.abs(velocityY) < 0.1) {
+              velocityX = 0;
+              velocityY = 0;
+              isMoving = false;
+            }
+          }
+          
+          // Update position
+          shipX += velocityX;
+          shipY += velocityY;
+          
+          // Keep in bounds
+          shipX = Math.max(20, Math.min(canvas.width - 20, shipX));
+          shipY = Math.max(20, Math.min(canvas.height - 20, shipY));
+        }
       }
       
       // Draw ship
       ctx.save();
       ctx.translate(shipX, shipY);
-      ctx.rotate(shipRotation);
+      ctx.rotate(rotation);
       
-      const shipSize = 20;
+      // Draw appropriate tier
+      const time = elapsed * 0.6;
+      switch (tier) {
+        case 1: drawTier1(ctx); break;
+        case 2: drawTier2(ctx); break;
+        case 3: drawTier3(ctx, time); break;
+        case 4: drawTier4(ctx, time); break;
+        case 5: drawTier5(ctx); break;
+      }
       
-      // Glow effect
-      ctx.shadowColor = glowColor;
-      ctx.shadowBlur = 15;
-      
-      // Ship body (triangle)
-      ctx.fillStyle = shipColor;
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(0, -shipSize);
-      ctx.lineTo(-shipSize * 0.6, shipSize * 0.7);
-      ctx.lineTo(shipSize * 0.6, shipSize * 0.7);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      
-      // Cockpit
-      ctx.fillStyle = 'rgba(100, 200, 255, 0.6)';
-      ctx.beginPath();
-      ctx.arc(0, -shipSize * 0.3, shipSize * 0.25, 0, Math.PI * 2);
-      ctx.fill();
-      
-      // Engine flames (animated)
-      const flameLength = 8 + Math.sin(elapsed * 10) * 4;
-      ctx.shadowBlur = 12;
-      ctx.shadowColor = '#ff6600';
-      ctx.fillStyle = '#ff6600';
-      ctx.beginPath();
-      ctx.moveTo(-shipSize * 0.3, shipSize * 0.7);
-      ctx.lineTo(-shipSize * 0.15, shipSize * 0.7 + flameLength);
-      ctx.lineTo(0, shipSize * 0.7);
-      ctx.closePath();
-      ctx.fill();
-      
-      ctx.beginPath();
-      ctx.moveTo(shipSize * 0.3, shipSize * 0.7);
-      ctx.lineTo(shipSize * 0.15, shipSize * 0.7 + flameLength);
-      ctx.lineTo(0, shipSize * 0.7);
-      ctx.closePath();
-      ctx.fill();
+      // Draw thrust when moving
+      const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+      if (speed > 0.5) {
+        ctx.strokeStyle = '#ff6600';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-5, 0);
+        ctx.lineTo(-15, -3);
+        ctx.lineTo(-12, 0);
+        ctx.lineTo(-15, 3);
+        ctx.closePath();
+        ctx.stroke();
+      }
       
       ctx.restore();
       
