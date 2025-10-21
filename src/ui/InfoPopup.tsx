@@ -35,10 +35,27 @@ export default function InfoPopup({ open, onClose }: Props) {
     let velocityX = 0;
     let velocityY = 0;
     let rotation = -Math.PI / 2; // Point up initially
-    let targetX = shipX;
-    let targetY = shipY;
-    let isMoving = false;
-    let nextTargetTime = 0;
+    let mouseX = shipX;
+    let mouseY = shipY;
+    let hasMouseMoved = false;
+
+    // Obstacle zones (text sections to avoid)
+    const obstacles = [
+      { x: 100, y: 0, width: 580, height: 120 }, // Title area
+      { x: 80, y: 150, width: 620, height: 100 }, // Features grid
+      { x: 80, y: 270, width: 620, height: 200 }, // Invite section
+      { x: 80, y: 490, width: 620, height: 100 }, // CTA button
+    ];
+
+    // Mouse tracking
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      mouseX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+      mouseY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+      hasMouseMoved = true;
+    };
+
+    canvas.addEventListener('mousemove', handleMouseMove);
 
     // Ship rendering functions (from game)
     const drawTier1 = (ctx: CanvasRenderingContext2D) => {
@@ -153,63 +170,72 @@ export default function InfoPopup({ open, onClose }: Props) {
       else if (elapsed < 4) tier = 4;
       else tier = 5; // Stay at tier 5 (healthiest)
       
-      // After 5 seconds, start flying around
+      // After 5 seconds, start following mouse
       if (elapsed >= 5) {
-        // Pick new target location every few seconds
-        if (now >= nextTargetTime) {
-          const margin = 30;
-          targetX = margin + Math.random() * (canvas.width - margin * 2);
-          targetY = margin + Math.random() * (canvas.height - margin * 2);
-          isMoving = true;
-          nextTargetTime = now + 2000 + Math.random() * 2000; // 2-4 seconds
+        // Use mouse position as target (or center if no mouse movement)
+        const targetX = hasMouseMoved ? mouseX : canvas.width / 2;
+        const targetY = hasMouseMoved ? mouseY : canvas.height / 2;
+        
+        // Calculate direction to target
+        let dx = targetX - shipX;
+        let dy = targetY - shipY;
+        
+        // Obstacle avoidance - check if path intersects any obstacle
+        for (const obs of obstacles) {
+          // Check if ship is near obstacle
+          const closestX = Math.max(obs.x, Math.min(shipX, obs.x + obs.width));
+          const closestY = Math.max(obs.y, Math.min(shipY, obs.y + obs.height));
+          const distToObs = Math.sqrt((shipX - closestX) ** 2 + (shipY - closestY) ** 2);
+          
+          if (distToObs < 60) { // Avoidance radius
+            // Calculate repulsion force away from obstacle
+            const repelX = shipX - closestX;
+            const repelY = shipY - closestY;
+            const repelDist = Math.sqrt(repelX * repelX + repelY * repelY) || 1;
+            
+            // Add strong avoidance force
+            const avoidStrength = (60 - distToObs) / 60 * 2;
+            dx += (repelX / repelDist) * avoidStrength * 50;
+            dy += (repelY / repelDist) * avoidStrength * 50;
+          }
         }
         
-        if (isMoving) {
-          // Calculate direction to target
-          const dx = targetX - shipX;
-          const dy = targetY - shipY;
-          const distance = Math.sqrt(dx * dx + dy * dy);
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance > 5) {
+          // Accelerate towards adjusted target
+          const acceleration = 0.4;
+          const maxSpeed = 3;
+          velocityX += (dx / distance) * acceleration;
+          velocityY += (dy / distance) * acceleration;
           
-          if (distance > 5) {
-            // Accelerate towards target
-            const acceleration = 0.3;
-            const maxSpeed = 2;
-            velocityX += (dx / distance) * acceleration;
-            velocityY += (dy / distance) * acceleration;
-            
-            // Cap speed
-            const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
-            if (speed > maxSpeed) {
-              velocityX = (velocityX / speed) * maxSpeed;
-              velocityY = (velocityY / speed) * maxSpeed;
-            }
-            
-            // Rotate to face movement direction
-            const targetRotation = Math.atan2(velocityY, velocityX);
-            let rotDiff = targetRotation - rotation;
-            // Normalize to -PI to PI
-            while (rotDiff > Math.PI) rotDiff -= 2 * Math.PI;
-            while (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
-            rotation += rotDiff * 0.1; // Smooth rotation
-          } else {
-            // Decelerate when close to target
-            velocityX *= 0.9;
-            velocityY *= 0.9;
-            if (Math.abs(velocityX) < 0.1 && Math.abs(velocityY) < 0.1) {
-              velocityX = 0;
-              velocityY = 0;
-              isMoving = false;
-            }
+          // Cap speed
+          const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+          if (speed > maxSpeed) {
+            velocityX = (velocityX / speed) * maxSpeed;
+            velocityY = (velocityY / speed) * maxSpeed;
           }
           
-          // Update position
-          shipX += velocityX;
-          shipY += velocityY;
-          
-          // Keep in bounds
-          shipX = Math.max(20, Math.min(canvas.width - 20, shipX));
-          shipY = Math.max(20, Math.min(canvas.height - 20, shipY));
+          // Rotate to face movement direction
+          const targetRotation = Math.atan2(velocityY, velocityX);
+          let rotDiff = targetRotation - rotation;
+          // Normalize to -PI to PI
+          while (rotDiff > Math.PI) rotDiff -= 2 * Math.PI;
+          while (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
+          rotation += rotDiff * 0.15; // Smooth rotation
+        } else {
+          // Decelerate when close to target
+          velocityX *= 0.92;
+          velocityY *= 0.92;
         }
+        
+        // Update position
+        shipX += velocityX;
+        shipY += velocityY;
+        
+        // Keep in bounds
+        shipX = Math.max(20, Math.min(canvas.width - 20, shipX));
+        shipY = Math.max(20, Math.min(canvas.height - 20, shipY));
       }
       
       // Draw ship
@@ -252,6 +278,7 @@ export default function InfoPopup({ open, onClose }: Props) {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
+      canvas.removeEventListener('mousemove', handleMouseMove);
     };
   }, [open]);
 
