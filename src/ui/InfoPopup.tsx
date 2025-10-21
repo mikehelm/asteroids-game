@@ -48,7 +48,7 @@ export default function InfoPopup({ open, onClose }: Props) {
       
       // Get all elements with specific classes that should be avoided
       const selectors = [
-        '.ip-hero',           // Title area
+        '.ip-title',          // Just the title text (not whole hero area)
         '.ip-feature',        // Feature boxes
         '.ip-featured-badge', // Orange button
         '.ip-featured-card',  // Invite friends container
