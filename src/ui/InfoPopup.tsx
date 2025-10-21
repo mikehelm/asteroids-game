@@ -1,22 +1,11 @@
 import { useEffect, useRef } from 'react';
 import './infoPopup.css';
+import { Asteroid } from '../types';
 
 type Props = {
   open: boolean;
   onClose: () => void;
 };
-
-// Simplified asteroid for popup background
-interface PopupAsteroid {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  rotation: number;
-  rotationSpeed: number;
-  radius: number;
-  shapeVariant: number;
-}
 
 // Star for background
 interface Star {
@@ -30,7 +19,7 @@ interface Star {
 
 export default function InfoPopup({ open, onClose }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const asteroidsRef = useRef<PopupAsteroid[]>([]);
+  const asteroidsRef = useRef<Asteroid[]>([]);
   const starsRef = useRef<Star[]>([]);
   const animationFrameRef = useRef<number>();
 
@@ -64,21 +53,30 @@ export default function InfoPopup({ open, onClose }: Props) {
       }
     }
 
-    // Initialize asteroids
+    // Initialize asteroids using game asteroid format
     if (asteroidsRef.current.length === 0) {
+      const sizes: ('small' | 'medium' | 'large')[] = ['small', 'medium', 'large'];
+      
       for (let i = 0; i < 12; i++) {
-        const sizeChoice = Math.random();
-        const radius = sizeChoice < 0.3 ? 15 : sizeChoice < 0.7 ? 30 : 50;
+        const size = sizes[Math.floor(Math.random() * sizes.length)];
+        const radius = size === 'small' ? 15 : size === 'medium' ? 30 : 50;
         
         asteroidsRef.current.push({
-          x: Math.random() * canvas.width,
-          y: Math.random() * canvas.height,
-          vx: (Math.random() - 0.5) * 0.5,
-          vy: (Math.random() - 0.5) * 0.5,
+          position: {
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height
+          },
+          velocity: {
+            x: (Math.random() - 0.5) * 0.5,
+            y: (Math.random() - 0.5) * 0.5
+          },
           rotation: Math.random() * Math.PI * 2,
           rotationSpeed: (Math.random() - 0.5) * 0.02,
+          size,
           radius,
-          shapeVariant: Math.floor(Math.random() * 4) + 1
+          health: 1,
+          maxHealth: 1,
+          mass: radius * 0.1
         });
       }
     }
@@ -97,46 +95,49 @@ export default function InfoPopup({ open, onClose }: Props) {
         ctx.fill();
       });
 
-      // Draw and update asteroids
+      // Draw and update asteroids (using game rendering)
       asteroidsRef.current.forEach(ast => {
         // Update position
-        ast.x += ast.vx;
-        ast.y += ast.vy;
+        ast.position.x += ast.velocity.x;
+        ast.position.y += ast.velocity.y;
         ast.rotation += ast.rotationSpeed;
 
         // Wrap around edges
-        if (ast.x < -ast.radius) ast.x = canvas.width + ast.radius;
-        if (ast.x > canvas.width + ast.radius) ast.x = -ast.radius;
-        if (ast.y < -ast.radius) ast.y = canvas.height + ast.radius;
-        if (ast.y > canvas.height + ast.radius) ast.y = -ast.radius;
+        if (ast.position.x < -ast.radius) ast.position.x = canvas.width + ast.radius;
+        if (ast.position.x > canvas.width + ast.radius) ast.position.x = -ast.radius;
+        if (ast.position.y < -ast.radius) ast.position.y = canvas.height + ast.radius;
+        if (ast.position.y > canvas.height + ast.radius) ast.position.y = -ast.radius;
 
-        // Draw asteroid (50% transparent)
+        // Draw asteroid using game's rendering (50% transparent)
         ctx.save();
-        ctx.translate(ast.x, ast.y);
-        ctx.rotate(ast.rotation);
         ctx.globalAlpha = 0.5;
+        ctx.translate(ast.position.x, ast.position.y);
+        ctx.rotate(ast.rotation);
         
-        // Draw asteroid shape
-        ctx.strokeStyle = '#888';
-        ctx.lineWidth = 2;
+        // Use game's asteroid shape rendering
+        const r = ast.radius;
+        const points = 14;
+        const jitter = (i: number) => {
+          const s = Math.sin(i * 12.9898 + r * 78.233) * 43758.5453;
+          return (s - Math.floor(s)) * 0.4 - 0.2;
+        };
+        
         ctx.beginPath();
-        
-        const points = 8;
-        for (let i = 0; i <= points; i++) {
-          const angle = (i / points) * Math.PI * 2;
-          const variance = 0.7 + Math.sin(angle * ast.shapeVariant) * 0.3;
-          const r = ast.radius * variance;
-          const x = Math.cos(angle) * r;
-          const y = Math.sin(angle) * r;
-          
-          if (i === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
-          }
+        for (let i = 0; i < points; i++) {
+          const ang = (i / points) * Math.PI * 2;
+          const rr = r * (0.85 + jitter(i));
+          const x = Math.cos(ang) * rr;
+          const y = Math.sin(ang) * rr;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
         }
-        
         ctx.closePath();
+        
+        // Fill and stroke like game asteroids
+        ctx.fillStyle = '#3a3a3a';
+        ctx.fill();
+        ctx.strokeStyle = '#666';
+        ctx.lineWidth = 1.5;
         ctx.stroke();
         
         ctx.restore();
