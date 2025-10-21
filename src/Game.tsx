@@ -630,6 +630,7 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
     CANVAS_HEIGHT,
     soundSystem,
     requestRestart: () => { try { initGame(); } catch {} },
+    togglePause: () => setIsPaused(p => !p),
 
     unlimitedMissilesRef,
     lastMissileFireAtRef,
