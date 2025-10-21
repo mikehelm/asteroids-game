@@ -2953,7 +2953,7 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
               } else {
                 // Regular shot
                 const angleToPlayer = Math.atan2(dy, dx);
-                const inaccuracy = (6 - Math.min(updated.difficulty, 5)) * 0.1;
+                const inaccuracy = (6 - Math.min(updated.difficulty, 5)) * 0.05; // Halved inaccuracy = 2x more accurate
                 const shootAngle = angleToPlayer + (Math.random() - 0.5) * inaccuracy;
                 gameState.alienBullets.push(createAlienBullet(updated.position, shootAngle));
                 try {
@@ -3903,7 +3903,7 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
             // Damage player (apply temporary force-field reduction if active)
             const { damageScale } = getDifficultySettings();
             const mult = bullet.damageMultiplier ? bullet.damageMultiplier : 1;
-            const base = 15 * mult;
+            const base = 30 * mult; // Doubled from 15 to 30 = 2x damage
             const shieldActive = (tractionBeamRef.current?.forceFieldUntil ?? 0) > performance.now();
             const shieldMult = shieldActive ? 0.5 : 1;
             gameState.player.health -= Math.round(base * damageScale * shieldMult);
