@@ -1253,6 +1253,48 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
       const now = performance.now();
       updateDeathSequence(deathSequenceRef.current, now, 16.67); // ~60fps deltaTime
       console.log('💀 Death sequence phase:', deathSequenceRef.current.phase, 'timeScale:', deathSequenceRef.current.timeScale.toFixed(2));
+      
+      // Check if sequence is complete
+      if (deathSequenceRef.current.phase === 'done') {
+        console.log('💀 Death sequence complete!');
+        
+        if (deathSequenceRef.current.hasLivesLeft) {
+          // Respawn player
+          console.log('💀 Respawning player with', gameState.lives - 1, 'lives remaining');
+          gameState.lives -= 1;
+          gameState.respawning = true;
+          gameState.respawnCountdown = 180;
+          gameState.player.health = gameState.player.maxHealth;
+          gameState.player.position = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
+          gameState.player.velocity = { x: 0, y: 0 };
+          gameState.player.invulnerable = 180;
+          gameState.player.shieldTime = 180;
+        } else {
+          // Game over
+          console.log('💀 Game over - no lives left');
+          gameOverPendingRef.current = true;
+          gameState.gameRunning = false;
+          setGameRunning(false);
+          
+          if (!gameOverStartRef.current) {
+            gameOverStartRef.current = performance.now();
+            const rewards = getCurrentGameTickets();
+            setFinalScore(gameState.score);
+            setFinalStage(gameState.stage);
+            setRewardAmount(rewards);
+            
+            // Delay scoreboard by 3 seconds
+            setTimeout(() => {
+              if (gameStateRef.current && !gameStateRef.current.gameRunning) {
+                setShowScoreboard(true);
+              }
+            }, 3000);
+          }
+        }
+        
+        // Clear death sequence
+        deathSequenceRef.current = null;
+      }
     }
 
     // Dev: throttle summary instead of per-30-frame spam
