@@ -35,11 +35,10 @@ export default function InfoPopup({ open, onClose }: Props) {
     let velocityX = 0;
     let velocityY = 0;
     let rotation = -Math.PI / 2; // Point up initially
-    let targetX = canvas.width / 2; // Target position set by click
-    let targetY = canvas.height / 2;
+    let mouseX = canvas.width / 2;
+    let mouseY = canvas.height / 2;
     let stuckCounter = 0; // Track how long ship has been stuck
     let waypoint: { x: number; y: number } | null = null; // Current pathfinding waypoint
-    let hasInitialTarget = false; // Track if we've set initial target
 
     // Get forbidden zones from actual DOM elements
     const getForbiddenZones = (): Array<{ x: number; y: number; width: number; height: number }> => {
@@ -169,29 +168,19 @@ export default function InfoPopup({ open, onClose }: Props) {
       return null;
     };
 
-    // Click/Touch handlers - set target on click only
-    const handleClick = (e: MouseEvent) => {
+    // Mouse/Touch tracking - simple chasing behavior
+    const handleMouseMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
-      targetX = ((e.clientX - rect.left) / rect.width) * canvas.width;
-      targetY = ((e.clientY - rect.top) / rect.height) * canvas.height;
-      hasInitialTarget = true;
-      
-      // Clear current waypoint to force recalculation
-      waypoint = null;
-      stuckCounter = 0;
+      mouseX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+      mouseY = ((e.clientY - rect.top) / rect.height) * canvas.height;
     };
 
-    const handleTouch = (e: TouchEvent) => {
+    const handleTouchMove = (e: TouchEvent) => {
       if (e.touches.length > 0) {
         const touch = e.touches[0];
         const rect = canvas.getBoundingClientRect();
-        targetX = ((touch.clientX - rect.left) / rect.width) * canvas.width;
-        targetY = ((touch.clientY - rect.top) / rect.height) * canvas.height;
-        hasInitialTarget = true;
-        
-        // Clear current waypoint to force recalculation
-        waypoint = null;
-        stuckCounter = 0;
+        mouseX = ((touch.clientX - rect.left) / rect.width) * canvas.width;
+        mouseY = ((touch.clientY - rect.top) / rect.height) * canvas.height;
         e.preventDefault();
       }
     };
@@ -199,8 +188,8 @@ export default function InfoPopup({ open, onClose }: Props) {
     // Attach to parent element instead of canvas
     const parentDiv = canvas.parentElement;
     if (parentDiv) {
-      parentDiv.addEventListener('click', handleClick);
-      parentDiv.addEventListener('touchstart', handleTouch, { passive: false });
+      parentDiv.addEventListener('mousemove', handleMouseMove);
+      parentDiv.addEventListener('touchmove', handleTouchMove, { passive: false });
     }
 
     // Ship rendering functions (from game)
@@ -316,37 +305,11 @@ export default function InfoPopup({ open, onClose }: Props) {
       else if (elapsed < 4) tier = 4;
       else tier = 5; // Stay at tier 5 (healthiest)
       
-      // Start following target immediately (while cycling through tiers)
+      // Start following mouse immediately (while cycling through tiers)
       {
-        // Check if we need a waypoint to reach target
-        const distToTarget = Math.sqrt((targetX - shipX) ** 2 + (targetY - shipY) ** 2);
-        
-        if (distToTarget > 50 && !waypoint) {
-          // Try to find a waypoint around obstacles
-          waypoint = findWaypoint(shipX, shipY, targetX, targetY);
-        }
-        
-        // Determine immediate target (waypoint or final target)
-        let immediateTargetX = targetX;
-        let immediateTargetY = targetY;
-        
-        // If we have a waypoint, use it as immediate target
-        if (waypoint) {
-          immediateTargetX = waypoint.x;
-          immediateTargetY = waypoint.y;
-          
-          // Check if we reached the waypoint
-          const distToWaypoint = Math.sqrt((shipX - waypoint.x) ** 2 + (shipY - waypoint.y) ** 2);
-          if (distToWaypoint < 30) {
-            // Reached waypoint, clear it
-            waypoint = null;
-            stuckCounter = 0;
-          }
-        }
-        
-        // Calculate direction to immediate target
-        const dx = immediateTargetX - shipX;
-        const dy = immediateTargetY - shipY;
+        // Simple mouse chasing - calculate direction to mouse
+        const dx = mouseX - shipX;
+        const dy = mouseY - shipY;
         const distance = Math.sqrt(dx * dx + dy * dy);
         
         if (distance > 5) {
@@ -398,9 +361,8 @@ export default function InfoPopup({ open, onClose }: Props) {
             velocityX *= 0.5;
             velocityY *= 0.5;
             
-            // If stuck for too long, find a waypoint immediately
-            if (stuckCounter > 20 && !waypoint) {
-              waypoint = findWaypoint(shipX, shipY, targetX, targetY);
+            // If stuck for too long, reset
+            if (stuckCounter > 30) {
               stuckCounter = 0;
             }
           } else {
@@ -463,8 +425,8 @@ export default function InfoPopup({ open, onClose }: Props) {
         cancelAnimationFrame(animationRef.current);
       }
       if (parentDiv) {
-        parentDiv.removeEventListener('click', handleClick);
-        parentDiv.removeEventListener('touchstart', handleTouch);
+        parentDiv.removeEventListener('mousemove', handleMouseMove);
+        parentDiv.removeEventListener('touchmove', handleTouchMove);
       }
     };
   }, [open]);
