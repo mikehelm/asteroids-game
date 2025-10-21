@@ -38,6 +38,8 @@ export default function InfoPopup({ open, onClose }: Props) {
     let mouseX = canvas.width / 2;
     let mouseY = canvas.height / 2;
     let hasMouseMoved = false;
+    let stuckCounter = 0; // Track how long ship has been stuck
+    let waypoint: { x: number; y: number } | null = null; // Current pathfinding waypoint
 
     // Forbidden zones (containers where ship center cannot go)
     const forbiddenZones = [
@@ -69,6 +71,38 @@ export default function InfoPopup({ open, onClose }: Props) {
         }
       }
       return false;
+    };
+
+    // Find a waypoint to navigate around obstacles
+    const findWaypoint = (fromX: number, fromY: number, toX: number, toY: number): { x: number; y: number } | null => {
+      // Check if direct path is clear
+      if (!isInForbiddenZone(toX, toY)) {
+        // Try to find a point that's not in a forbidden zone
+        // Check corners of obstacles between ship and target
+        for (const zone of forbiddenZones) {
+          // Check if this obstacle is between ship and target
+          const zoneCenterX = zone.x + zone.width / 2;
+          const zoneCenterY = zone.y + zone.height / 2;
+          
+          // Generate corner waypoints around this obstacle
+          const corners = [
+            { x: zone.x - 20, y: zone.y - 20 }, // Top-left
+            { x: zone.x + zone.width + 20, y: zone.y - 20 }, // Top-right
+            { x: zone.x - 20, y: zone.y + zone.height + 20 }, // Bottom-left
+            { x: zone.x + zone.width + 20, y: zone.y + zone.height + 20 }, // Bottom-right
+          ];
+          
+          // Find closest valid corner
+          for (const corner of corners) {
+            if (!isInForbiddenZone(corner.x, corner.y) &&
+                corner.x >= 20 && corner.x <= canvas.width - 20 &&
+                corner.y >= 20 && corner.y <= canvas.height - 20) {
+              return corner;
+            }
+          }
+        }
+      }
+      return null;
     };
 
     // Mouse tracking - attach to parent div to ensure it works
@@ -200,13 +234,31 @@ export default function InfoPopup({ open, onClose }: Props) {
       
       // After 5 seconds, start following mouse
       if (elapsed >= 5) {
-        // Calculate direction to mouse
-        const dx = mouseX - shipX;
-        const dy = mouseY - shipY;
+        // Determine target (waypoint or mouse)
+        let targetX = mouseX;
+        let targetY = mouseY;
+        
+        // If we have a waypoint, use it as target
+        if (waypoint) {
+          targetX = waypoint.x;
+          targetY = waypoint.y;
+          
+          // Check if we reached the waypoint
+          const distToWaypoint = Math.sqrt((shipX - waypoint.x) ** 2 + (shipY - waypoint.y) ** 2);
+          if (distToWaypoint < 30) {
+            // Reached waypoint, clear it
+            waypoint = null;
+            stuckCounter = 0;
+          }
+        }
+        
+        // Calculate direction to target
+        const dx = targetX - shipX;
+        const dy = targetY - shipY;
         const distance = Math.sqrt(dx * dx + dy * dy);
         
         if (distance > 5) {
-          // Accelerate towards mouse
+          // Accelerate towards target
           const acceleration = 0.5;
           const maxSpeed = 4;
           velocityX += (dx / distance) * acceleration;
@@ -233,18 +285,34 @@ export default function InfoPopup({ open, onClose }: Props) {
           // Safe to move - update position
           shipX = nextX;
           shipY = nextY;
+          stuckCounter = 0; // Reset stuck counter
         } else {
-          // Would enter forbidden zone - stop and slide along edge
+          // Would enter forbidden zone - try sliding
+          let moved = false;
+          
           // Try moving only in X direction
           if (!isInForbiddenZone(shipX + velocityX, shipY)) {
             shipX += velocityX;
+            moved = true;
           } else if (!isInForbiddenZone(shipX, shipY + velocityY)) {
             // Try moving only in Y direction
             shipY += velocityY;
-          } else {
-            // Can't move - stop
+            moved = true;
+          }
+          
+          if (!moved) {
+            // Can't move at all - we're stuck
+            stuckCounter++;
             velocityX *= 0.5;
             velocityY *= 0.5;
+            
+            // If stuck for too long, find a waypoint
+            if (stuckCounter > 30 && !waypoint) {
+              waypoint = findWaypoint(shipX, shipY, mouseX, mouseY);
+              stuckCounter = 0;
+            }
+          } else {
+            stuckCounter = 0;
           }
         }
         
