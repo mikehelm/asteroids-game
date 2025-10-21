@@ -46,29 +46,74 @@ export default function InfoPopup({ open, onClose }: Props) {
       const zones: Array<{ x: number; y: number; width: number; height: number }> = [];
       const canvasRect = canvas.getBoundingClientRect();
       
-      // Get all elements with specific classes that should be avoided
-      const selectors = [
-        '.ip-title',          // Title text
-        '.ip-subtitle',       // Subtitle text  
+      // For title and subtitle, measure actual text width instead of container
+      const titleEl = document.querySelector('.ip-title');
+      const subtitleEl = document.querySelector('.ip-subtitle');
+      
+      if (titleEl) {
+        const rect = titleEl.getBoundingClientRect();
+        // Create a temporary span to measure actual text width
+        const tempSpan = document.createElement('span');
+        tempSpan.style.visibility = 'hidden';
+        tempSpan.style.position = 'absolute';
+        tempSpan.style.font = window.getComputedStyle(titleEl).font;
+        tempSpan.textContent = titleEl.textContent;
+        document.body.appendChild(tempSpan);
+        const textWidth = tempSpan.offsetWidth;
+        const textHeight = tempSpan.offsetHeight;
+        document.body.removeChild(tempSpan);
+        
+        // Center the text zone within the element
+        const centerX = rect.left + rect.width / 2;
+        const x = ((centerX - textWidth / 2 - canvasRect.left) / canvasRect.width) * canvas.width;
+        const y = ((rect.top - canvasRect.top) / canvasRect.height) * canvas.height;
+        const width = (textWidth / canvasRect.width) * canvas.width;
+        const height = (textHeight / canvasRect.height) * canvas.height;
+        
+        zones.push({ x, y, width, height });
+      }
+      
+      if (subtitleEl) {
+        const rect = subtitleEl.getBoundingClientRect();
+        const tempSpan = document.createElement('span');
+        tempSpan.style.visibility = 'hidden';
+        tempSpan.style.position = 'absolute';
+        tempSpan.style.font = window.getComputedStyle(subtitleEl).font;
+        tempSpan.textContent = subtitleEl.textContent;
+        document.body.appendChild(tempSpan);
+        const textWidth = tempSpan.offsetWidth;
+        const textHeight = tempSpan.offsetHeight;
+        document.body.removeChild(tempSpan);
+        
+        const centerX = rect.left + rect.width / 2;
+        const x = ((centerX - textWidth / 2 - canvasRect.left) / canvasRect.width) * canvas.width;
+        const y = ((rect.top - canvasRect.top) / canvasRect.height) * canvas.height;
+        const width = (textWidth / canvasRect.width) * canvas.width;
+        const height = (textHeight / canvasRect.height) * canvas.height;
+        
+        zones.push({ x, y, width, height });
+      }
+      
+      // For other elements, use container bounds with padding reduction
+      const containerSelectors = [
         '.ip-feature',        // Feature boxes
         '.ip-featured-badge', // Orange button
         '.ip-featured-card',  // Invite friends container
         '.ip-cta'             // Continue playing button
       ];
       
-      selectors.forEach(selector => {
+      containerSelectors.forEach(selector => {
         const elements = document.querySelectorAll(selector);
         elements.forEach(el => {
           const rect = el.getBoundingClientRect();
           
-          // Convert to canvas coordinates with tighter bounds (reduce padding)
-          const padding = 10; // Reduce zone by 10px on each side
+          // Convert to canvas coordinates with tighter bounds
+          const padding = 10;
           const x = ((rect.left - canvasRect.left) / canvasRect.width) * canvas.width + padding;
           const y = ((rect.top - canvasRect.top) / canvasRect.height) * canvas.height + padding;
           const width = (rect.width / canvasRect.width) * canvas.width - (padding * 2);
           const height = (rect.height / canvasRect.height) * canvas.height - (padding * 2);
           
-          // Only add if zone is still valid after padding reduction
           if (width > 0 && height > 0) {
             zones.push({ x, y, width, height });
           }
