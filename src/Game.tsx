@@ -1368,7 +1368,10 @@ const pauseFreezeNowRef = useRef<number | undefined>(undefined);
       // Forward call sites only; no logic moved yet
       // Pause updates when paused OR when any modal/popup is showing
       if (!isPausedRef.current && !anyModalOpen) {
-        updateFrame(gameState, frameNow, dt, env, soundSystem);
+        // Apply death sequence time scale (slow motion)
+        const timeScale = deathSequenceRef.current?.timeScale ?? 1.0;
+        const scaledDt = dt * timeScale;
+        updateFrame(gameState, frameNow, scaledDt, env, soundSystem);
       }
 
       // World tiling: detect screen wrap by comparing previous vs current positions

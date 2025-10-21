@@ -90,40 +90,25 @@ Implement dramatic slow-motion death sequence with camera zoom, explosion, and r
 **Goal:** Slow down all game updates during death sequence
 
 ### Tasks:
-- [ ] **3.1** Calculate time scale
+- [x] **3.1** Calculate time scale
   - Get `timeScale` from `deathSequenceRef.current?.timeScale ?? 1.0`
   - Default to 1.0 if no sequence active
 
-- [ ] **3.2** Apply to deltaTime
-  - Calculate: `const scaledDelta = deltaTime * timeScale`
-  - Use `scaledDelta` for all physics updates
+- [x] **3.2** Apply to deltaTime
+  - Calculate: `const scaledDt = dt * timeScale`
+  - Applied at line 1373 before updateFrame call
 
-- [ ] **3.3** Update player movement
-  - Location: Player velocity updates
-  - Use `scaledDelta` instead of `deltaTime`
-
-- [ ] **3.4** Update bullet movement
-  - Location: Bullet position updates
-  - Use `scaledDelta` instead of `deltaTime`
-
-- [ ] **3.5** Update asteroid movement
-  - Location: Asteroid position updates
-  - Use `scaledDelta` instead of `deltaTime`
-
-- [ ] **3.6** Update alien movement
-  - Location: Alien ship updates
-  - Use `scaledDelta` instead of `deltaTime`
-
-- [ ] **3.7** Update particle effects
-  - Location: Explosion particles, trails, etc.
-  - Use `scaledDelta` instead of `deltaTime`
+- [x] **3.3-3.7** Update all movement (player, bullets, asteroids, aliens, particles)
+  - ALL handled by updateFrame() which receives scaledDt
+  - Single point of application = less error-prone
+  - Player, bullets, asteroids, aliens, particles all use same deltaTime
 
 - [ ] **3.8** Test slow motion effect
   - Verify game slows to 20% speed (0.2 timeScale)
   - Verify smooth transition
   - Verify speeds back up correctly
 
-**Status:** ⏳ NOT STARTED  
+**Status:** ✅ COMPLETE (pending testing)  
 **Blockers:** Phase 2 must complete first  
 **Notes:** This is the most invasive change - affects ALL game updates. Be careful!
 
