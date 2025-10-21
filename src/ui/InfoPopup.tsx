@@ -39,15 +39,39 @@ export default function InfoPopup({ open, onClose }: Props) {
     let mouseY = canvas.height / 2;
     let hasMouseMoved = false;
 
-    // Obstacle zones (text sections to avoid)
-    const obstacles = [
-      { x: 100, y: 0, width: 580, height: 120 }, // Title area
-      { x: 80, y: 150, width: 620, height: 100 }, // Features grid
-      { x: 80, y: 270, width: 620, height: 200 }, // Invite section
-      { x: 80, y: 490, width: 620, height: 100 }, // CTA button
+    // Forbidden zones (containers where ship center cannot go)
+    const forbiddenZones = [
+      // Title area - "Flipit Asteroids"
+      { x: 250, y: 80, width: 280, height: 120 },
+      
+      // Left feature box - "$10,000"
+      { x: 78, y: 228, width: 400, height: 105 },
+      
+      // Right feature box - "Node Giveaways"
+      { x: 502, y: 228, width: 400, height: 105 },
+      
+      // Orange "Invite for rewards!" button
+      { x: 76, y: 372, width: 192, height: 48 },
+      
+      // Large blue "Invite Friends" container
+      { x: 78, y: 425, width: 824, height: 395 },
+      
+      // Bottom "Continue Playing" button
+      { x: 78, y: 860, width: 824, height: 100 }
     ];
 
-    // Mouse tracking
+    // Helper function to check if point is in any forbidden zone
+    const isInForbiddenZone = (x: number, y: number): boolean => {
+      for (const zone of forbiddenZones) {
+        if (x >= zone.x && x <= zone.x + zone.width &&
+            y >= zone.y && y <= zone.y + zone.height) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // Mouse tracking - attach to parent div to ensure it works
     const handleMouseMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       mouseX = ((e.clientX - rect.left) / rect.width) * canvas.width;
@@ -55,7 +79,11 @@ export default function InfoPopup({ open, onClose }: Props) {
       hasMouseMoved = true;
     };
 
-    canvas.addEventListener('mousemove', handleMouseMove);
+    // Attach to parent element instead of canvas
+    const parentDiv = canvas.parentElement;
+    if (parentDiv) {
+      parentDiv.addEventListener('mousemove', handleMouseMove);
+    }
 
     // Ship rendering functions (from game)
     const drawTier1 = (ctx: CanvasRenderingContext2D) => {
@@ -172,85 +200,13 @@ export default function InfoPopup({ open, onClose }: Props) {
       
       // After 5 seconds, start following mouse
       if (elapsed >= 5) {
-        // Always use actual mouse position as target
-        const targetX = mouseX;
-        const targetY = mouseY;
-        
-        // Calculate base direction to target
-        let dx = targetX - shipX;
-        let dy = targetY - shipY;
-        
-        // Strong obstacle avoidance with steering
-        let avoidanceX = 0;
-        let avoidanceY = 0;
-        
-        for (const obs of obstacles) {
-          // Expand obstacle bounds for avoidance
-          const expandedObs = {
-            x: obs.x - 40,
-            y: obs.y - 40,
-            width: obs.width + 80,
-            height: obs.height + 80
-          };
-          
-          // Check if ship is inside or near obstacle
-          const isNearX = shipX >= expandedObs.x && shipX <= expandedObs.x + expandedObs.width;
-          const isNearY = shipY >= expandedObs.y && shipY <= expandedObs.y + expandedObs.height;
-          
-          if (isNearX && isNearY) {
-            // Find closest edge to escape from
-            const distToLeft = Math.abs(shipX - expandedObs.x);
-            const distToRight = Math.abs(shipX - (expandedObs.x + expandedObs.width));
-            const distToTop = Math.abs(shipY - expandedObs.y);
-            const distToBottom = Math.abs(shipY - (expandedObs.y + expandedObs.height));
-            
-            const minDist = Math.min(distToLeft, distToRight, distToTop, distToBottom);
-            
-            // Push away from nearest edge with strong force
-            const pushStrength = 100;
-            if (minDist === distToLeft) avoidanceX -= pushStrength;
-            else if (minDist === distToRight) avoidanceX += pushStrength;
-            else if (minDist === distToTop) avoidanceY -= pushStrength;
-            else if (minDist === distToBottom) avoidanceY += pushStrength;
-          }
-          
-          // Also check if direct path to target crosses obstacle
-          const pathCrossesObs = 
-            targetX >= obs.x && targetX <= obs.x + obs.width &&
-            targetY >= obs.y && targetY <= obs.y + obs.height;
-          
-          if (pathCrossesObs) {
-            // Steer around obstacle - go around the side
-            const obsCenterX = obs.x + obs.width / 2;
-            const obsCenterY = obs.y + obs.height / 2;
-            
-            // Determine which way to go around
-            if (shipX < obsCenterX) {
-              // Ship is on left, steer left
-              avoidanceX -= 30;
-            } else {
-              // Ship is on right, steer right
-              avoidanceX += 30;
-            }
-            
-            if (shipY < obsCenterY) {
-              // Ship is above, steer up
-              avoidanceY -= 30;
-            } else {
-              // Ship is below, steer down
-              avoidanceY += 30;
-            }
-          }
-        }
-        
-        // Combine target direction with avoidance
-        dx += avoidanceX;
-        dy += avoidanceY;
-        
+        // Calculate direction to mouse
+        const dx = mouseX - shipX;
+        const dy = mouseY - shipY;
         const distance = Math.sqrt(dx * dx + dy * dy);
         
         if (distance > 5) {
-          // Accelerate towards adjusted target
+          // Accelerate towards mouse
           const acceleration = 0.5;
           const maxSpeed = 4;
           velocityX += (dx / distance) * acceleration;
@@ -262,23 +218,44 @@ export default function InfoPopup({ open, onClose }: Props) {
             velocityX = (velocityX / speed) * maxSpeed;
             velocityY = (velocityY / speed) * maxSpeed;
           }
-          
-          // Rotate to face movement direction
-          const targetRotation = Math.atan2(velocityY, velocityX);
-          let rotDiff = targetRotation - rotation;
-          // Normalize to -PI to PI
-          while (rotDiff > Math.PI) rotDiff -= 2 * Math.PI;
-          while (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
-          rotation += rotDiff * 0.15; // Smooth rotation
         } else {
-          // Decelerate when close to target
+          // Decelerate when close
           velocityX *= 0.9;
           velocityY *= 0.9;
         }
         
-        // Update position
-        shipX += velocityX;
-        shipY += velocityY;
+        // Calculate next position
+        const nextX = shipX + velocityX;
+        const nextY = shipY + velocityY;
+        
+        // Check if next position is in forbidden zone
+        if (!isInForbiddenZone(nextX, nextY)) {
+          // Safe to move - update position
+          shipX = nextX;
+          shipY = nextY;
+        } else {
+          // Would enter forbidden zone - stop and slide along edge
+          // Try moving only in X direction
+          if (!isInForbiddenZone(shipX + velocityX, shipY)) {
+            shipX += velocityX;
+          } else if (!isInForbiddenZone(shipX, shipY + velocityY)) {
+            // Try moving only in Y direction
+            shipY += velocityY;
+          } else {
+            // Can't move - stop
+            velocityX *= 0.5;
+            velocityY *= 0.5;
+          }
+        }
+        
+        // Rotate to face movement direction
+        if (Math.abs(velocityX) > 0.1 || Math.abs(velocityY) > 0.1) {
+          const targetRotation = Math.atan2(velocityY, velocityX);
+          let rotDiff = targetRotation - rotation;
+          while (rotDiff > Math.PI) rotDiff -= 2 * Math.PI;
+          while (rotDiff < -Math.PI) rotDiff += 2 * Math.PI;
+          rotation += rotDiff * 0.15;
+        }
         
         // Keep in bounds
         shipX = Math.max(20, Math.min(canvas.width - 20, shipX));
@@ -325,7 +302,9 @@ export default function InfoPopup({ open, onClose }: Props) {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
-      canvas.removeEventListener('mousemove', handleMouseMove);
+      if (parentDiv) {
+        parentDiv.removeEventListener('mousemove', handleMouseMove);
+      }
     };
   }, [open]);
 
