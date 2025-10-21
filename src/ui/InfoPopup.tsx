@@ -172,40 +172,87 @@ export default function InfoPopup({ open, onClose }: Props) {
       
       // After 5 seconds, start following mouse
       if (elapsed >= 5) {
-        // Use mouse position as target (or center if no mouse movement)
-        const targetX = hasMouseMoved ? mouseX : canvas.width / 2;
-        const targetY = hasMouseMoved ? mouseY : canvas.height / 2;
+        // Always use actual mouse position as target
+        const targetX = mouseX;
+        const targetY = mouseY;
         
-        // Calculate direction to target
+        // Calculate base direction to target
         let dx = targetX - shipX;
         let dy = targetY - shipY;
         
-        // Obstacle avoidance - check if path intersects any obstacle
+        // Strong obstacle avoidance with steering
+        let avoidanceX = 0;
+        let avoidanceY = 0;
+        
         for (const obs of obstacles) {
-          // Check if ship is near obstacle
-          const closestX = Math.max(obs.x, Math.min(shipX, obs.x + obs.width));
-          const closestY = Math.max(obs.y, Math.min(shipY, obs.y + obs.height));
-          const distToObs = Math.sqrt((shipX - closestX) ** 2 + (shipY - closestY) ** 2);
+          // Expand obstacle bounds for avoidance
+          const expandedObs = {
+            x: obs.x - 40,
+            y: obs.y - 40,
+            width: obs.width + 80,
+            height: obs.height + 80
+          };
           
-          if (distToObs < 60) { // Avoidance radius
-            // Calculate repulsion force away from obstacle
-            const repelX = shipX - closestX;
-            const repelY = shipY - closestY;
-            const repelDist = Math.sqrt(repelX * repelX + repelY * repelY) || 1;
+          // Check if ship is inside or near obstacle
+          const isNearX = shipX >= expandedObs.x && shipX <= expandedObs.x + expandedObs.width;
+          const isNearY = shipY >= expandedObs.y && shipY <= expandedObs.y + expandedObs.height;
+          
+          if (isNearX && isNearY) {
+            // Find closest edge to escape from
+            const distToLeft = Math.abs(shipX - expandedObs.x);
+            const distToRight = Math.abs(shipX - (expandedObs.x + expandedObs.width));
+            const distToTop = Math.abs(shipY - expandedObs.y);
+            const distToBottom = Math.abs(shipY - (expandedObs.y + expandedObs.height));
             
-            // Add strong avoidance force
-            const avoidStrength = (60 - distToObs) / 60 * 2;
-            dx += (repelX / repelDist) * avoidStrength * 50;
-            dy += (repelY / repelDist) * avoidStrength * 50;
+            const minDist = Math.min(distToLeft, distToRight, distToTop, distToBottom);
+            
+            // Push away from nearest edge with strong force
+            const pushStrength = 100;
+            if (minDist === distToLeft) avoidanceX -= pushStrength;
+            else if (minDist === distToRight) avoidanceX += pushStrength;
+            else if (minDist === distToTop) avoidanceY -= pushStrength;
+            else if (minDist === distToBottom) avoidanceY += pushStrength;
+          }
+          
+          // Also check if direct path to target crosses obstacle
+          const pathCrossesObs = 
+            targetX >= obs.x && targetX <= obs.x + obs.width &&
+            targetY >= obs.y && targetY <= obs.y + obs.height;
+          
+          if (pathCrossesObs) {
+            // Steer around obstacle - go around the side
+            const obsCenterX = obs.x + obs.width / 2;
+            const obsCenterY = obs.y + obs.height / 2;
+            
+            // Determine which way to go around
+            if (shipX < obsCenterX) {
+              // Ship is on left, steer left
+              avoidanceX -= 30;
+            } else {
+              // Ship is on right, steer right
+              avoidanceX += 30;
+            }
+            
+            if (shipY < obsCenterY) {
+              // Ship is above, steer up
+              avoidanceY -= 30;
+            } else {
+              // Ship is below, steer down
+              avoidanceY += 30;
+            }
           }
         }
+        
+        // Combine target direction with avoidance
+        dx += avoidanceX;
+        dy += avoidanceY;
         
         const distance = Math.sqrt(dx * dx + dy * dy);
         
         if (distance > 5) {
           // Accelerate towards adjusted target
-          const acceleration = 0.4;
-          const maxSpeed = 3;
+          const acceleration = 0.5;
+          const maxSpeed = 4;
           velocityX += (dx / distance) * acceleration;
           velocityY += (dy / distance) * acceleration;
           
@@ -225,8 +272,8 @@ export default function InfoPopup({ open, onClose }: Props) {
           rotation += rotDiff * 0.15; // Smooth rotation
         } else {
           // Decelerate when close to target
-          velocityX *= 0.92;
-          velocityY *= 0.92;
+          velocityX *= 0.9;
+          velocityY *= 0.9;
         }
         
         // Update position
