@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import './infoPopup.css';
 
 type Props = {
@@ -7,6 +7,10 @@ type Props = {
 };
 
 export default function InfoPopup({ open, onClose }: Props) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const animationRef = useRef<number>();
+  const startTimeRef = useRef<number>(0);
+
   // Close on ESC
   useEffect(() => {
     if (!open) return;
@@ -14,6 +18,116 @@ export default function InfoPopup({ open, onClose }: Props) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
+
+  // Animate ship
+  useEffect(() => {
+    if (!open || !canvasRef.current) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    startTimeRef.current = performance.now();
+
+    const animate = (now: number) => {
+      const elapsed = (now - startTimeRef.current) / 1000; // seconds
+      
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Determine health state based on time (1 second each, end on green)
+      let shipColor, glowColor;
+      if (elapsed < 1) {
+        // Red (low health)
+        shipColor = '#ff3333';
+        glowColor = '#ff3333';
+      } else if (elapsed < 2) {
+        // Yellow (medium health)
+        shipColor = '#ffcc00';
+        glowColor = '#ffcc00';
+      } else {
+        // Green (full health) - stays here
+        shipColor = '#00ff66';
+        glowColor = '#00ff66';
+      }
+      
+      // After 3 seconds, ship flies around in header area
+      let shipX, shipY, shipRotation;
+      if (elapsed < 3) {
+        // Centered during health cycle
+        shipX = canvas.width / 2;
+        shipY = canvas.height / 2;
+        shipRotation = 0;
+      } else {
+        // Flying around after health cycle complete
+        const flyTime = elapsed - 3;
+        const radius = 25;
+        shipX = canvas.width / 2 + Math.cos(flyTime * 1.2) * radius;
+        shipY = canvas.height / 2 + Math.sin(flyTime * 1.2) * radius * 0.6;
+        shipRotation = Math.atan2(Math.sin(flyTime * 1.2) * 0.6, Math.cos(flyTime * 1.2)) + Math.PI / 2;
+      }
+      
+      // Draw ship
+      ctx.save();
+      ctx.translate(shipX, shipY);
+      ctx.rotate(shipRotation);
+      
+      const shipSize = 20;
+      
+      // Glow effect
+      ctx.shadowColor = glowColor;
+      ctx.shadowBlur = 15;
+      
+      // Ship body (triangle)
+      ctx.fillStyle = shipColor;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -shipSize);
+      ctx.lineTo(-shipSize * 0.6, shipSize * 0.7);
+      ctx.lineTo(shipSize * 0.6, shipSize * 0.7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      
+      // Cockpit
+      ctx.fillStyle = 'rgba(100, 200, 255, 0.6)';
+      ctx.beginPath();
+      ctx.arc(0, -shipSize * 0.3, shipSize * 0.25, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Engine flames (animated)
+      const flameLength = 8 + Math.sin(elapsed * 10) * 4;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = '#ff6600';
+      ctx.fillStyle = '#ff6600';
+      ctx.beginPath();
+      ctx.moveTo(-shipSize * 0.3, shipSize * 0.7);
+      ctx.lineTo(-shipSize * 0.15, shipSize * 0.7 + flameLength);
+      ctx.lineTo(0, shipSize * 0.7);
+      ctx.closePath();
+      ctx.fill();
+      
+      ctx.beginPath();
+      ctx.moveTo(shipSize * 0.3, shipSize * 0.7);
+      ctx.lineTo(shipSize * 0.15, shipSize * 0.7 + flameLength);
+      ctx.lineTo(0, shipSize * 0.7);
+      ctx.closePath();
+      ctx.fill();
+      
+      ctx.restore();
+      
+      animationRef.current = requestAnimationFrame(animate);
+    };
+    
+    animationRef.current = requestAnimationFrame(animate);
+    
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -24,7 +138,14 @@ export default function InfoPopup({ open, onClose }: Props) {
         
         {/* Hero Section */}
         <div className="ip-hero">
-          <div className="ip-icon-burst">🚀</div>
+          <div className="ip-icon-burst">
+            <canvas 
+              ref={canvasRef} 
+              width={120} 
+              height={80}
+              style={{ display: 'block', margin: '0 auto' }}
+            />
+          </div>
           <h2 className="ip-title">Flipit Asteroids</h2>
           <p className="ip-subtitle">Play Free, Win Big</p>
         </div>
