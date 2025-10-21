@@ -41,26 +41,40 @@ export default function InfoPopup({ open, onClose }: Props) {
     let stuckCounter = 0; // Track how long ship has been stuck
     let waypoint: { x: number; y: number } | null = null; // Current pathfinding waypoint
 
-    // Forbidden zones (containers where ship center cannot go)
-    const forbiddenZones = [
-      // Title area - "Flipit Asteroids"
-      { x: 250, y: 80, width: 280, height: 120 },
+    // Get forbidden zones from actual DOM elements
+    const getForbiddenZones = (): Array<{ x: number; y: number; width: number; height: number }> => {
+      const zones: Array<{ x: number; y: number; width: number; height: number }> = [];
+      const canvasRect = canvas.getBoundingClientRect();
       
-      // Left feature box - "$10,000"
-      { x: 78, y: 228, width: 400, height: 105 },
+      // Get all elements with specific classes that should be avoided
+      const selectors = [
+        '.ip-hero',           // Title area
+        '.ip-feature',        // Feature boxes
+        '.ip-featured-badge', // Orange button
+        '.ip-featured-card',  // Invite friends container
+        '.ip-cta'             // Continue playing button
+      ];
       
-      // Right feature box - "Node Giveaways"
-      { x: 502, y: 228, width: 400, height: 105 },
+      selectors.forEach(selector => {
+        const elements = document.querySelectorAll(selector);
+        elements.forEach(el => {
+          const rect = el.getBoundingClientRect();
+          
+          // Convert to canvas coordinates
+          const x = ((rect.left - canvasRect.left) / canvasRect.width) * canvas.width;
+          const y = ((rect.top - canvasRect.top) / canvasRect.height) * canvas.height;
+          const width = (rect.width / canvasRect.width) * canvas.width;
+          const height = (rect.height / canvasRect.height) * canvas.height;
+          
+          zones.push({ x, y, width, height });
+        });
+      });
       
-      // Orange "Invite for rewards!" button
-      { x: 76, y: 372, width: 192, height: 48 },
-      
-      // Large blue "Invite Friends" container
-      { x: 78, y: 425, width: 824, height: 395 },
-      
-      // Bottom "Continue Playing" button
-      { x: 78, y: 860, width: 824, height: 100 }
-    ];
+      return zones;
+    };
+    
+    // Get initial forbidden zones
+    let forbiddenZones = getForbiddenZones();
 
     // Helper function to check if point is in any forbidden zone
     const isInForbiddenZone = (x: number, y: number): boolean => {
